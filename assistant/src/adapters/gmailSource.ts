@@ -1,24 +1,33 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { google } from "googleapis";
+import type { GmailMessage } from "../core/types.js";
 
 const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
 
-function getHeader(headers, name) {
+type GmailHeader = { name?: string | null; value?: string | null };
+type GmailPayload = {
+  mimeType?: string | null;
+  body?: { data?: string | null } | null;
+  headers?: GmailHeader[] | null;
+  parts?: GmailPayload[] | null;
+} | null;
+
+function getHeader(headers: GmailHeader[] | undefined, name: string): string {
   return headers?.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value || "";
 }
 
-function decodeBase64Url(input) {
+function decodeBase64Url(input: string | null | undefined): string {
   if (!input) return "";
   const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
   return Buffer.from(normalized, "base64").toString("utf8");
 }
 
-function stripHtml(html) {
+function stripHtml(html: string): string {
   return html.replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function extractTextFromPayload(payload) {
+function extractTextFromPayload(payload: GmailPayload): string {
   if (!payload) return "";
 
   if (payload.mimeType === "text/plain" && payload.body?.data) {
@@ -37,13 +46,20 @@ function extractTextFromPayload(payload) {
   return "";
 }
 
-async function loadOAuthClient(projectRoot) {
+async function loadOAuthClient(projectRoot: string) {
   const credentialsPath = path.join(projectRoot, "credentials.json");
   const tokenPath = path.join(projectRoot, "token.json");
 
   const credentialsRaw = await fs.readFile(credentialsPath, "utf8");
-  const credentials = JSON.parse(credentialsRaw);
+  const credentials = JSON.parse(credentialsRaw) as {
+    installed?: { client_id: string; client_secret: string; redirect_uris: string[] };
+    web?: { client_id: string; client_secret: string; redirect_uris: string[] };
+  };
   const config = credentials.installed || credentials.web;
+
+  if (!config) {
+    throw new Error("credentials.json is missing installed/web OAuth client config.");
+  }
 
   const client = new google.auth.OAuth2(config.client_id, config.client_secret, config.redirect_uris[0]);
 
@@ -59,7 +75,15 @@ async function loadOAuthClient(projectRoot) {
   return client;
 }
 
-export async function fetchGmailMessages({ projectRoot, maxMessages, lastInternalDateMs }) {
+export async function fetchGmailMessages({
+  projectRoot,
+  maxMessages,
+  lastInternalDateMs
+}: {
+  projectRoot: string;
+  maxMessages: number;
+  lastInternalDateMs: number;
+}): Promise<GmailMessage[]> {
   const auth = await loadOAuthClient(projectRoot);
   const gmail = google.gmail({ version: "v1", auth });
 
@@ -72,9 +96,11 @@ export async function fetchGmailMessages({ projectRoot, maxMessages, lastInterna
   });
 
   const messageRefs = listRes.data.messages || [];
-  const out = [];
+  const out: GmailMessage[] = [];
 
   for (const ref of messageRefs) {
+    if (!ref.id) continue;
+
     const msgRes = await gmail.users.messages.get({
       userId: "me",
       id: ref.id,
@@ -82,8 +108,10 @@ export async function fetchGmailMessages({ projectRoot, maxMessages, lastInterna
     });
 
     const msg = msgRes.data;
-    const headers = msg.payload?.headers || [];
-    const bodyText = extractTextFromPayload(msg.payload);
+    const headers = (msg.payload?.headers as GmailHeader[] | undefined) || [];
+    const bodyText = extractTextFromPayload(msg.payload as GmailPayload);
+
+    if (!msg.id) continue;
 
     out.push({
       source: "gmail",

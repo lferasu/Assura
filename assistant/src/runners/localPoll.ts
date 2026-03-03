@@ -1,9 +1,9 @@
 import "dotenv/config";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { notifyProcessed, notifySkipped } from "../adapters/consoleNotifier.js";
 import { fetchGmailMessages } from "../adapters/gmailSource.js";
 import { isProcessed, loadState, markProcessed, saveState, updateCursor } from "../adapters/fileStateStore.js";
-import { notifyProcessed, notifySkipped } from "../adapters/consoleNotifier.js";
 import { runPipelineOnMessage } from "../core/pipeline.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -14,7 +14,7 @@ const statePath = path.join(projectRoot, "data/state.json");
 const POLL_INTERVAL_SECONDS = Number(process.env.POLL_INTERVAL_SECONDS || 120);
 const GMAIL_MAX_MESSAGES = Number(process.env.GMAIL_MAX_MESSAGES || 15);
 
-async function pollOnce() {
+async function pollOnce(): Promise<void> {
   const state = await loadState(statePath);
   const lastInternalDateMs = state.sources["gmail:primary"].cursor.lastInternalDateMs || 0;
 
@@ -50,7 +50,7 @@ async function pollOnce() {
   await saveState(statePath, state);
 }
 
-async function runForever() {
+async function runForever(): Promise<void> {
   console.log("Starting Gmail local poller...");
   console.log(`Polling every ${POLL_INTERVAL_SECONDS} seconds`);
 
@@ -65,11 +65,12 @@ async function runForever() {
     try {
       await pollOnce();
     } catch (error) {
-      console.error("Poll error:", error.message);
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("Poll error:", message);
     }
 
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_SECONDS * 1000));
   }
 }
 
-runForever();
+void runForever();
