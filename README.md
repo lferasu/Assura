@@ -1,39 +1,64 @@
-# Assura Agent
+# Assura
 
-Assura is a **Gmail polling agent** that watches incoming messages, detects school schedule-impacting announcements, extracts structured schedule data with an LLM, and prints a human-readable summary plus JSON calendar proposals.
+Assura is a Gmail-based personal assistant that polls incoming email, classifies each message, estimates importance, identifies whether follow-up is needed, and produces structured action suggestions for things like calendar changes, to-do updates, or manual review.
 
-## What this agent does
+The current implementation is intentionally conservative: it extracts and stores recommendations, but it does not execute external tool actions yet. Suggested actions are routed into a manual-review execution plan so real integrations can be added safely later.
 
-On a loop, the agent:
+## What It Does
 
-1. Reads previously saved state from `assistant/data/state.json`.
+On each poll cycle, Assura:
+
+1. Reads local processing state from `assistant/data/state.json`.
 2. Pulls recent messages from Gmail using the Gmail API.
-3. Filters each message with keyword/date gating logic.
-4. Runs LLM extraction to produce strict schedule-impact JSON.
-5. Generates a readable summary of schedule changes.
-6. Logs either:
-   - a processed schedule-impact result, or
-   - a skip reason.
-7. Marks each message as processed and updates the poll cursor so messages are not reprocessed.
+3. Skips only empty messages.
+4. Uses an LLM to produce a structured message assessment.
+5. Generates a readable summary of category, importance, and suggested next steps.
+6. Stores the processed assessment and planned actions as JSONL records.
+7. Prints the assessment and execution plan to the terminal.
+8. Marks the Gmail message as processed and advances the cursor.
 
-## Project structure
+## Current Architecture
 
-- `assistant/src/runners/localPoll.ts` – long-running local poll loop.
-- `assistant/src/adapters/gmailSource.ts` – Gmail OAuth + message fetch + text extraction.
-- `assistant/src/core/gate.ts` – lightweight schedule-impact gating logic.
-- `assistant/src/core/extract.ts` – LLM JSON extraction + schema validation.
-- `assistant/src/core/summarize.ts` – concise human-readable summary generation.
-- `assistant/src/adapters/fileStateStore.ts` – JSON state persistence.
-- `assistant/src/adapters/consoleNotifier.ts` – terminal output for processed/skipped messages.
+The code is organized so future storage and tool integrations can be added without rewriting the core flow.
+
+- `assistant/src/runners/localPoll.ts`: long-running local poll loop.
+- `assistant/src/adapters/gmailSource.ts`: Gmail OAuth, fetch, and normalization.
+- `assistant/src/core/extract.ts`: LLM-based message classification and structured extraction.
+- `assistant/src/core/summarize.ts`: readable summaries for processed messages.
+- `assistant/src/core/pipeline.ts`: orchestration of extraction, storage, and action preparation.
+- `assistant/src/core/contracts.ts`: extension interfaces for `MessageStore`, `ActionStore`, and `ToolExecutor`.
+- `assistant/src/adapters/fileMessageStore.ts`: append-only JSONL storage for assessments.
+- `assistant/src/adapters/fileActionStore.ts`: append-only JSONL storage for planned actions.
+- `assistant/src/adapters/manualReviewToolExecutor.ts`: default executor that marks actions for manual review.
+- `assistant/src/adapters/fileStateStore.ts`: JSON state persistence for poll cursor and processed IDs.
+- `assistant/src/adapters/consoleNotifier.ts`: terminal output for processed and skipped messages.
+- `assistant/src/config/env.ts`: centralized environment loading and validation.
+
+## Extracted Output Model
+
+Each processed email is converted into a structured assessment with:
+
+- `category`
+- `importance` (`low`, `medium`, `high`, `critical`)
+- `needsAction`
+- `summary`
+- `actionSummary`
+- `keyDates`
+- `actionItems`
+- `facts`
+- `evidence`
+- `confidence`
+
+The pipeline also generates a `PreparedAction[]` execution plan. Right now those actions are marked as `manual_review`, but this is the handoff point for future calendar, to-do, or document tools.
 
 ## Requirements
 
 - Node.js 20+
 - A Google Cloud project with Gmail API enabled
 - OAuth client credentials (`Desktop app` works well)
-- OpenAI API key (or compatible key for the configured model)
+- OpenAI API key
 
-## Environment variables
+## Environment Variables
 
 Copy and edit:
 
@@ -43,67 +68,94 @@ cp assistant/.env.example assistant/.env
 
 Variables:
 
-- `OPENAI_API_KEY` – required
-- `OPENAI_MODEL` – defaults to `gpt-4.1-mini`
-- `POLL_INTERVAL_SECONDS` – defaults to `120`
-- `GMAIL_MAX_MESSAGES` – defaults to `15`
+- `OPENAI_API_KEY`: required
+- `OPENAI_MODEL`: defaults to `gpt-4.1-mini`
+- `POLL_INTERVAL_SECONDS`: defaults to `120`
+- `GMAIL_MAX_MESSAGES`: defaults to `15`
 
-## Run locally
+## Local Setup
 
-From repository root:
+From the repository root:
 
 1. Install dependencies:
 
-   ```bash
-   cd assistant
-   npm install
-   ```
+```bash
+cd assistant
+npm install
+```
 
-2. Add OAuth credentials file:
+2. Add OAuth credentials:
 
-   - Place `credentials.json` in `assistant/`.
+- Place `credentials.json` in `assistant/`.
 
 3. Generate OAuth token (`assistant/token.json`):
 
-   - Run once:
-
-     ```bash
-     npm run poll
-     ```
-
-   - If `token.json` is missing, the app prints an authorization URL.
-   - Complete consent, obtain token JSON, and save it to `assistant/token.json`.
+- Run `npm run poll`.
+- If `token.json` is missing, the app will print an authorization URL.
+- Complete consent and save the resulting token JSON to `assistant/token.json`.
 
 4. Start polling:
 
-   ```bash
-   npm run poll
-   ```
+```bash
+npm run poll
+```
 
-The process runs continuously and logs processed/ skipped messages to stdout.
+## Type Checking
 
-## Deploy
+```bash
+cd assistant
+npm run typecheck
+```
 
-Because this agent is a long-running poller, it deploys well as a small worker service.
+## VS Code Debugging
 
-### Option A: VM/container with process manager (recommended)
+A launch configuration is included at `.vscode/launch.json`.
+
+Use the `Assura: Poll Runner` debug target to run `npm run poll` from the `assistant` directory with `assistant/.env` loaded automatically.
+
+## Data Files
+
+The poller uses these local files:
+
+- `assistant/data/state.json`: processed message IDs and Gmail cursor
+- `assistant/data/message-assessments.jsonl`: stored message assessments
+- `assistant/data/action-items.jsonl`: stored suggested actions plus prepared execution plans
+
+These are runtime artifacts and should not be committed.
+
+## Git Hygiene
+
+The repository includes a root `.gitignore` that ignores:
+
+- `assistant/node_modules/`
+- `assistant/.env`
+- `assistant/credentials.json`
+- `assistant/token.json`
+- generated JSONL runtime files
+- most `.vscode` files except the committed debug config
+
+## Deployment
+
+Assura currently runs best as a long-lived worker process.
+
+### Option A: VM or Container
 
 1. Provision a host with Node.js 20+.
-2. Copy the repo (or build artifact) to the host.
-3. Place secret files and env:
-   - `assistant/.env`
-   - `assistant/credentials.json`
-   - `assistant/token.json`
-4. Install production deps:
+2. Copy the repo to the host.
+3. Add the required secret files:
+- `assistant/.env`
+- `assistant/credentials.json`
+- `assistant/token.json`
+4. Install dependencies:
 
-   ```bash
-   cd assistant
-   npm ci --omit=dev
-   ```
+```bash
+cd assistant
+npm ci
+```
 
-5. Run with a supervisor (`systemd`, `pm2`, or container restart policy).
+5. Run with a supervisor such as `systemd`, `pm2`, or a container restart policy.
 
-`systemd` example `assura-agent.service`:
+Example `systemd` unit:
 
 ```ini
 [Unit]
@@ -122,31 +174,14 @@ EnvironmentFile=/opt/assura/assistant/.env
 WantedBy=multi-user.target
 ```
 
-Then:
+### Option B: Scheduled Execution
 
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable assura-agent
-sudo systemctl start assura-agent
-sudo systemctl status assura-agent
-```
+If you prefer scheduled runs instead of a long-lived poller, refactor the runner so a single poll pass can be invoked on a timer, then trigger it from cron or a scheduler.
 
-### Option B: Scheduled/serverless execution
+## Next Extension Points
 
-If your platform does not support long-lived processes, you can adapt the runner to execute a single poll pass (extract `pollOnce`) and trigger it on a schedule (e.g., every 1–5 minutes with Cloud Scheduler/Cron).
+The current architecture is designed for these next steps:
 
-## Operational notes
-
-- `assistant/data/state.json` tracks processed message IDs and last Gmail cursor.
-- Keep `token.json` and `credentials.json` secret.
-- If OAuth refresh tokens expire/revoke, regenerate `token.json`.
-- Start with lower `GMAIL_MAX_MESSAGES` while validating behavior.
-
-## Quick start
-
-```bash
-cp assistant/.env.example assistant/.env
-cd assistant
-npm install
-npm run poll
-```
+1. Replace `ManualReviewToolExecutor` with real calendar, task, or document integrations.
+2. Replace the file-backed stores with a database-backed `MessageStore` and `ActionStore`.
+3. Add attachment and document ingestion without changing the core extraction contract.

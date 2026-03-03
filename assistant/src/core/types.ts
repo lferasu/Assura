@@ -1,18 +1,8 @@
 export const EXTRACT_SCHEMA_VERSION = 1;
 
-export const DAY_NAMES = [
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday",
-  "Sunday"
-] as const;
+export const IMPORTANCE_LEVELS = ["low", "medium", "high", "critical"] as const;
 
-export const DAYS = new Set<string>(DAY_NAMES);
-
-export type DayName = (typeof DAY_NAMES)[number] | null;
+export type ImportanceLevel = (typeof IMPORTANCE_LEVELS)[number];
 
 export interface NormalizedMessage {
   source: "gmail";
@@ -34,39 +24,45 @@ export interface GateResult {
   reason: string;
 }
 
-export interface ExtractedChange {
-  date: string;
-  dayOfWeek: DayName;
-  studentsAttend: boolean;
-  staffWorkDay: boolean | null;
-  notes: string | null;
-}
-
-export interface ImportantDate {
+export interface KeyDate {
   label: string;
   date: string;
 }
 
-export interface CalendarProposal {
-  action: "create_event";
+export interface SuggestedAction {
+  kind: string;
   title: string;
-  date: string;
-  allDay: true;
+  dueDate: string | null;
   details: string | null;
+}
+
+export interface PreparedAction extends SuggestedAction {
+  executionMode: "manual_review" | "auto_execute";
+  toolName: string | null;
+  reason: string;
+}
+
+export interface ExtractedFact {
+  label: string;
+  value: string;
 }
 
 export interface ExtractionEvidence {
   quote: string;
 }
 
-export interface ExtractedSchedule {
+export interface MessageAssessment {
   schemaVersion: 1;
-  type: "schedule_change" | "not_schedule_change";
-  confidence: number;
-  changes: ExtractedChange[];
-  importantDates: ImportantDate[];
-  calendarProposals: CalendarProposal[];
+  category: string;
+  importance: ImportanceLevel;
+  needsAction: boolean;
+  summary: string;
+  actionSummary: string | null;
+  keyDates: KeyDate[];
+  actionItems: SuggestedAction[];
+  facts: ExtractedFact[];
   evidence: ExtractionEvidence[];
+  confidence: number;
 }
 
 export interface PipelineSkippedResult {
@@ -77,9 +73,10 @@ export interface PipelineSkippedResult {
 export interface PipelineProcessedResult {
   status: "processed";
   gate: GateResult;
-  extracted: ExtractedSchedule;
+  extracted: MessageAssessment;
   summary: string;
-  calendarProposals: CalendarProposal[];
+  actionItems: SuggestedAction[];
+  preparedActions: PreparedAction[];
 }
 
 export type PipelineResult = PipelineSkippedResult | PipelineProcessedResult;

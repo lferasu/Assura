@@ -1,11 +1,13 @@
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
-import { DAYS, EXTRACT_SCHEMA_VERSION } from "./types.js";
-import type { ExtractedSchedule, NormalizedMessage } from "./types.js";
+import { OPENAI_API_KEY, OPENAI_MODEL } from "../config/env.js";
+import { EXTRACT_SCHEMA_VERSION, IMPORTANCE_LEVELS } from "./types.js";
+import type { MessageAssessment, NormalizedMessage } from "./types.js";
 
 function buildModel(): ChatOpenAI {
   return new ChatOpenAI({
-    model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
+    apiKey: OPENAI_API_KEY,
+    model: OPENAI_MODEL,
     temperature: 0
   });
 }
@@ -29,67 +31,102 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function validateExtractionShape(parsed: unknown): ExtractedSchedule {
+function asOptionalString(value: unknown, fieldName: string): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string") throw new Error(`${fieldName} must be string|null`);
+  return value;
+}
+
+function asNonEmptyString(value: unknown, fieldName: string): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`${fieldName} must be a non-empty string`);
+  }
+  return value;
+}
+
+function validateExtractionShape(parsed: unknown): MessageAssessment {
   const obj = asRecord(parsed);
 
   if (obj.schemaVersion !== EXTRACT_SCHEMA_VERSION) throw new Error("schemaVersion must be 1");
-  if (!["schedule_change", "not_schedule_change"].includes(String(obj.type))) throw new Error("invalid type");
-  if (typeof obj.confidence !== "number" || obj.confidence < 0 || obj.confidence > 1) throw new Error("invalid confidence");
-
-  if (!Array.isArray(obj.changes)) throw new Error("changes must be array");
-  for (const change of obj.changes) {
-    const row = asRecord(change);
-    if (!isIsoDate(row.date)) throw new Error("change.date must be YYYY-MM-DD");
-    if (!(row.dayOfWeek === null || DAYS.has(String(row.dayOfWeek)))) throw new Error("invalid dayOfWeek");
-    if (typeof row.studentsAttend !== "boolean") throw new Error("studentsAttend must be boolean");
-    if (!(row.staffWorkDay === null || typeof row.staffWorkDay === "boolean")) throw new Error("staffWorkDay must be boolean|null");
-    if (!(row.notes === null || typeof row.notes === "string")) throw new Error("notes must be string|null");
+  asNonEmptyString(obj.category, "category");
+  if (!IMPORTANCE_LEVELS.includes(String(obj.importance) as (typeof IMPORTANCE_LEVELS)[number])) {
+    throw new Error("invalid importance");
+  }
+  if (typeof obj.needsAction !== "boolean") throw new Error("needsAction must be boolean");
+  asNonEmptyString(obj.summary, "summary");
+  asOptionalString(obj.actionSummary, "actionSummary");
+  if (typeof obj.confidence !== "number" || obj.confidence < 0 || obj.confidence > 1) {
+    throw new Error("invalid confidence");
   }
 
-  if (!Array.isArray(obj.importantDates)) throw new Error("importantDates must be array");
-  for (const item of obj.importantDates) {
+  if (!Array.isArray(obj.keyDates)) throw new Error("keyDates must be array");
+  for (const item of obj.keyDates) {
     const row = asRecord(item);
-    if (typeof row.label !== "string") throw new Error("importantDates.label must be string");
-    if (!isIsoDate(row.date)) throw new Error("importantDates.date must be YYYY-MM-DD");
+    asNonEmptyString(row.label, "keyDates.label");
+    if (!isIsoDate(row.date)) throw new Error("keyDates.date must be YYYY-MM-DD");
   }
 
-  if (!Array.isArray(obj.calendarProposals)) throw new Error("calendarProposals must be array");
-  for (const item of obj.calendarProposals) {
+  if (!Array.isArray(obj.actionItems)) throw new Error("actionItems must be array");
+  for (const item of obj.actionItems) {
     const row = asRecord(item);
-    if (row.action !== "create_event") throw new Error("calendar action must be create_event");
-    if (typeof row.title !== "string") throw new Error("calendar title must be string");
-    if (!isIsoDate(row.date)) throw new Error("calendar date must be YYYY-MM-DD");
-    if (row.allDay !== true) throw new Error("calendar allDay must be true");
-    if (!(row.details === null || typeof row.details === "string")) throw new Error("calendar details must be string|null");
+    asNonEmptyString(row.kind, "actionItems.kind");
+    asNonEmptyString(row.title, "actionItems.title");
+    if (!(row.dueDate === null || isIsoDate(row.dueDate))) {
+      throw new Error("actionItems.dueDate must be YYYY-MM-DD|null");
+    }
+    asOptionalString(row.details, "actionItems.details");
+  }
+
+  if (!Array.isArray(obj.facts)) throw new Error("facts must be array");
+  for (const item of obj.facts) {
+    const row = asRecord(item);
+    asNonEmptyString(row.label, "facts.label");
+    asNonEmptyString(row.value, "facts.value");
   }
 
   if (!Array.isArray(obj.evidence)) throw new Error("evidence must be array");
   for (const item of obj.evidence) {
     const row = asRecord(item);
-    if (typeof row.quote !== "string") throw new Error("evidence.quote must be string");
+    asNonEmptyString(row.quote, "evidence.quote");
   }
 
-  return obj as unknown as ExtractedSchedule;
+  return obj as unknown as MessageAssessment;
 }
 
 function buildExtractionPrompt(message: NormalizedMessage): string {
   const clippedBody = (message.bodyText || "").slice(0, 6000);
-  return `Extract schedule impact details from this email into strict JSON.
-Return ONLY valid JSON. No markdown.
-The JSON must contain the exact keys and data types described below.
+  return `Analyze this email for a personal Gmail assistant and return ONLY valid JSON.
+No markdown. No explanation outside JSON.
+
+Goal:
+- classify the message broadly
+- estimate importance
+- identify whether follow-up is needed
+- suggest possible actions without assuming only calendar workflows
+
 Use schemaVersion=1.
-If this is not schedule impacting, type must be "not_schedule_change" and arrays may be empty.
 
 Required JSON shape:
 {
   "schemaVersion": 1,
-  "type": "schedule_change" | "not_schedule_change",
-  "confidence": number,
-  "changes": [{"date":"YYYY-MM-DD","dayOfWeek":"Monday"|"Tuesday"|"Wednesday"|"Thursday"|"Friday"|"Saturday"|"Sunday"|null,"studentsAttend":boolean,"staffWorkDay":boolean|null,"notes":string|null}],
-  "importantDates": [{"label":string,"date":"YYYY-MM-DD"}],
-  "calendarProposals": [{"action":"create_event","title":string,"date":"YYYY-MM-DD","allDay":true,"details":string|null}],
-  "evidence": [{"quote":string}]
+  "category": string,
+  "importance": "low" | "medium" | "high" | "critical",
+  "needsAction": boolean,
+  "summary": string,
+  "actionSummary": string | null,
+  "keyDates": [{"label": string, "date": "YYYY-MM-DD"}],
+  "actionItems": [{"kind": string, "title": string, "dueDate": "YYYY-MM-DD" | null, "details": string | null}],
+  "facts": [{"label": string, "value": string}],
+  "evidence": [{"quote": string}],
+  "confidence": number
 }
+
+Guidance:
+- category should be broad and useful, such as school, work, family, billing, travel, appointment, task, reminder, promotion, or other.
+- needsAction should be true only when the user likely needs to do something.
+- actionItems may include calendar updates, to-do items, replies, document review, or any other useful next step.
+- If the email is informational only, use needsAction=false and an empty actionItems array.
+- Keep summaries concise and factual.
 
 Email metadata:
 subject: ${message.subject || ""}
@@ -98,7 +135,7 @@ sentAt: ${message.sentAt || ""}
 bodyText:\n${clippedBody}`;
 }
 
-export async function extractScheduleJson(message: NormalizedMessage): Promise<ExtractedSchedule> {
+export async function extractMessageAssessment(message: NormalizedMessage): Promise<MessageAssessment> {
   const model = buildModel();
   const system = new SystemMessage("You are an information extraction engine that outputs strict JSON.");
   const prompt = buildExtractionPrompt(message);

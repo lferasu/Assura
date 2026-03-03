@@ -1,0 +1,22 @@
+# Dependencies
+/assistant/node_modules/
+
+# Local environment and secrets
+/assistant/.env
+/assistant/credentials.json
+/assistant/token.json
+
+# Generated runtime data
+/assistant/data/*.jsonl
+/assistant/data/state.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor settings
+/.vscode/*
+!/.vscode/launch.json
+
+# Accidental root-level npm artifacts
+/package-lock.json
