@@ -65,11 +65,34 @@ async function loadOAuthClient(projectRoot: string) {
 
   try {
     const tokenRaw = await fs.readFile(tokenPath, "utf8");
-    client.setCredentials(JSON.parse(tokenRaw));
-  } catch {
+    const parsed = JSON.parse(tokenRaw);
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error("token.json must contain a JSON object.");
+    }
+    client.setCredentials(parsed);
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: string }).code === "ENOENT"
+    ) {
+      const authUrl = client.generateAuthUrl({ access_type: "offline", scope: SCOPES });
+      console.log("Authorize this app by visiting this URL:", authUrl);
+      throw new Error("token.json missing. Complete OAuth flow and save token.json in project root.");
+    }
+
+    if (error instanceof SyntaxError) {
+      throw new Error("token.json is not valid JSON. Re-run OAuth setup and regenerate the token file.");
+    }
+
+    if (error instanceof Error) {
+      throw new Error(`Unable to load token.json: ${error.message}`);
+    }
+
     const authUrl = client.generateAuthUrl({ access_type: "offline", scope: SCOPES });
     console.log("Authorize this app by visiting this URL:", authUrl);
-    throw new Error("token.json missing. Complete OAuth flow and save token.json in project root.");
+    throw new Error("Unable to load token.json.");
   }
 
   return client;

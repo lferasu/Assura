@@ -31,8 +31,23 @@ function readNumberEnv(name: string, fallback: number): number {
   return parsed;
 }
 
+function readBooleanEnv(name: string, fallback: boolean): boolean {
+  const value = readEnv(name);
+  if (!value) return fallback;
+
+  const normalized = value.toLowerCase();
+  if (["true", "1", "yes", "on"].includes(normalized)) return true;
+  if (["false", "0", "no", "off"].includes(normalized)) return false;
+
+  throw new Error(`Environment variable ${name} must be a boolean value.`);
+}
+
 export const OPENAI_API_KEY = readRequiredEnv("OPENAI_API_KEY");
 export const OPENAI_MODEL = readEnv("OPENAI_MODEL") ?? "gpt-4.1-mini";
 export const POLL_INTERVAL_SECONDS = readNumberEnv("POLL_INTERVAL_SECONDS", 120);
 export const GMAIL_MAX_MESSAGES = readNumberEnv("GMAIL_MAX_MESSAGES", 15);
-
+export const API_PORT = readNumberEnv("API_PORT", 8787);
+export const CHROMA_ENABLED = readBooleanEnv("CHROMA_ENABLED", false);
+export const CHROMA_URL = readEnv("CHROMA_URL") ?? "http://127.0.0.1:8000";
+export const CHROMA_COLLECTION = readEnv("CHROMA_COLLECTION") ?? "assura_messages";
+export const CHROMA_EMBEDDING_MODEL = readEnv("CHROMA_EMBEDDING_MODEL") ?? "text-embedding-3-small";

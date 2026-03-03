@@ -44,6 +44,18 @@ function asNonEmptyString(value: unknown, fieldName: string): string {
   return value;
 }
 
+function clipForLog(value: string, maxLength = 500): string {
+  if (!value) return "<empty>";
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`;
+}
+
+function describeValidationFailure(error: unknown, payload: string): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  return new Error(
+    `Message assessment validation failed: ${message}\nRaw model output (truncated): ${clipForLog(payload)}`
+  );
+}
+
 function validateExtractionShape(parsed: unknown): MessageAssessment {
   const obj = asRecord(parsed);
 
@@ -144,11 +156,21 @@ export async function extractMessageAssessment(message: NormalizedMessage): Prom
   try {
     const response = await model.invoke([system, new HumanMessage(prompt)]);
     raw = getTextContent(response).trim();
-    return validateExtractionShape(JSON.parse(raw));
+    const parsed = JSON.parse(raw);
+    return validateExtractionShape(parsed);
   } catch (error) {
+    if (raw) {
+      console.error(describeValidationFailure(error, raw).message);
+    }
+
     const repairPrompt = `Repair this content into ONLY valid JSON matching the required schema. Return ONLY JSON. No markdown.\n\n${raw || String(error)}`;
     const repaired = await model.invoke([system, new HumanMessage(repairPrompt)]);
     const repairedRaw = getTextContent(repaired).trim();
-    return validateExtractionShape(JSON.parse(repairedRaw));
+    try {
+      const repairedParsed = JSON.parse(repairedRaw);
+      return validateExtractionShape(repairedParsed);
+    } catch (repairError) {
+      throw describeValidationFailure(repairError, repairedRaw);
+    }
   }
 }

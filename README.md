@@ -33,6 +33,29 @@ The code is organized so future storage and tool integrations can be added witho
 - `assistant/src/adapters/fileStateStore.ts`: JSON state persistence for poll cursor and processed IDs.
 - `assistant/src/adapters/consoleNotifier.ts`: terminal output for processed and skipped messages.
 - `assistant/src/config/env.ts`: centralized environment loading and validation.
+- `mobile/`: Expo-based React Native client for browsing summaries and suggested actions.
+
+## Mobile App
+
+The repository also includes a React Native client in `mobile/`.
+
+It currently provides:
+
+- an inbox-style view of message summaries
+- suggested action cards
+- category filtering
+- importance filtering
+- an action-required toggle
+
+The mobile app currently uses local mock data shaped like the assistant output. It is intended to be wired to a real API or persisted store next.
+
+Run it with:
+
+```bash
+cd mobile
+npm install
+npm run start
+```
 
 ## Extracted Output Model
 
