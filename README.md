@@ -18,13 +18,13 @@ On a loop, the agent:
 
 ## Project structure
 
-- `assistant/src/runners/localPoll.js` – long-running local poll loop.
-- `assistant/src/adapters/gmailSource.js` – Gmail OAuth + message fetch + text extraction.
-- `assistant/src/core/gate.js` – lightweight schedule-impact gating logic.
-- `assistant/src/core/extract.js` – LLM JSON extraction + schema validation.
-- `assistant/src/core/summarize.js` – concise human-readable summary generation.
-- `assistant/src/adapters/fileStateStore.js` – JSON state persistence.
-- `assistant/src/adapters/consoleNotifier.js` – terminal output for processed/skipped messages.
+- `assistant/src/runners/localPoll.ts` – long-running local poll loop.
+- `assistant/src/adapters/gmailSource.ts` – Gmail OAuth + message fetch + text extraction.
+- `assistant/src/core/gate.ts` – lightweight schedule-impact gating logic.
+- `assistant/src/core/extract.ts` – LLM JSON extraction + schema validation.
+- `assistant/src/core/summarize.ts` – concise human-readable summary generation.
+- `assistant/src/adapters/fileStateStore.ts` – JSON state persistence.
+- `assistant/src/adapters/consoleNotifier.ts` – terminal output for processed/skipped messages.
 
 ## Requirements
 
