@@ -122,7 +122,7 @@ Required JSON shape:
 }
 
 Guidance:
-- category should be broad and useful, such as school, work, family, billing, travel, appointment, task, reminder, promotion, or other.
+- category should be broad and useful, such as education, work, family, billing, travel, appointment, task, reminder, promotion, or other.
 - needsAction should be true only when the user likely needs to do something.
 - actionItems may include calendar updates, to-do items, replies, document review, or any other useful next step.
 - If the email is informational only, use needsAction=false and an empty actionItems array.
