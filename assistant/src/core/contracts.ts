@@ -1,4 +1,5 @@
-import type { MessageAssessment, NormalizedMessage, PreparedAction, SuggestedAction } from "./types.js";
+import type { NormalizedMessage } from "./message.js";
+import type { MessageAssessment, PreparedAction, SuggestedAction } from "./types.js";
 import type {
   FeedbackEvent,
   SuppressionEvaluation,

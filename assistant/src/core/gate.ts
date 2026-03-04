@@ -1,4 +1,5 @@
-import type { GateResult, NormalizedMessage } from "./types.js";
+import type { NormalizedMessage } from "./message.js";
+import type { GateResult } from "./types.js";
 
 export function shouldProcessMessage(message: NormalizedMessage): GateResult {
   const subject = (message.subject || "").trim();

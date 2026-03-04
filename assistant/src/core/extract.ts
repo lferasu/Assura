@@ -2,9 +2,10 @@ import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { OPENAI_API_KEY, OPENAI_MODEL } from "../config/env.js";
 import { applyToolCallableSemantics } from "./actionSemantics.js";
+import { formatMessageSender, type NormalizedMessage } from "./message.js";
 import { getToolCallableActionKinds } from "../../../shared/toolRegistry.js";
 import { EXTRACT_SCHEMA_VERSION, IMPORTANCE_LEVELS } from "./types.js";
-import type { MessageAssessment, NormalizedMessage } from "./types.js";
+import type { MessageAssessment } from "./types.js";
 
 function buildModel(): ChatOpenAI {
   if (!OPENAI_API_KEY) {
@@ -150,8 +151,8 @@ Guidance:
 
 Email metadata:
 subject: ${message.subject || ""}
-from: ${message.from || ""}
-sentAt: ${message.sentAt || ""}
+from: ${formatMessageSender(message)}
+receivedAt: ${message.receivedAt || ""}
 bodyText:\n${clippedBody}`;
 }
 

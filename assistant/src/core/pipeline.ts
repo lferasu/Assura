@@ -2,7 +2,8 @@ import { extractMessageAssessment } from "./extract.js";
 import { shouldProcessMessage } from "./gate.js";
 import { summarizeExtraction } from "./summarize.js";
 import type { PipelineDependencies } from "./contracts.js";
-import type { NormalizedMessage, PipelineResult } from "./types.js";
+import type { NormalizedMessage } from "./message.js";
+import type { PipelineResult } from "./types.js";
 
 export async function runPipelineOnMessage(
   message: NormalizedMessage,

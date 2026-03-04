@@ -26,6 +26,28 @@ interface RuleListResponse {
   items: MobileSuppressionRule[];
 }
 
+const REQUEST_TIMEOUT_MS = 8000;
+
+async function fetchWithTimeout(input: string, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Request timed out after ${REQUEST_TIMEOUT_MS / 1000} seconds`);
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const fallback = `Request failed with status ${response.status}`;
@@ -42,7 +64,7 @@ async function readJson<T>(response: Response): Promise<T> {
 }
 
 export async function fetchInbox(limit = 50): Promise<MobileAssessment[]> {
-  const response = await fetch(`${API_BASE_URL}/api/messages?limit=${limit}`);
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/messages?limit=${limit}`);
   const payload = await readJson<InboxResponse>(response);
   return payload.items;
 }
@@ -63,7 +85,7 @@ export async function fetchInboxWindow(options?: {
     searchParams.set("attentionOnly", "true");
   }
 
-  const response = await fetch(`${API_BASE_URL}/api/messages?${searchParams.toString()}`);
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/messages?${searchParams.toString()}`);
   const payload = await readJson<InboxResponse>(response);
   return payload.items;
 }
@@ -73,7 +95,7 @@ export async function searchInbox(query: string, limit = 50): Promise<MobileAsse
     limit: String(limit),
     q: query
   });
-  const response = await fetch(`${API_BASE_URL}/api/messages?${searchParams.toString()}`);
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/messages?${searchParams.toString()}`);
   const payload = await readJson<InboxResponse>(response);
   return payload.items;
 }
@@ -99,7 +121,7 @@ export async function searchInboxWindow(
     searchParams.set("attentionOnly", "true");
   }
 
-  const response = await fetch(`${API_BASE_URL}/api/messages?${searchParams.toString()}`);
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/messages?${searchParams.toString()}`);
   const payload = await readJson<InboxResponse>(response);
   return payload.items;
 }
@@ -108,7 +130,7 @@ export async function updateInboxItem(
   id: string,
   updates: { done?: boolean; removed?: boolean }
 ): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/api/messages/${encodeURIComponent(id)}`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/messages/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json"
@@ -120,7 +142,7 @@ export async function updateInboxItem(
 }
 
 export async function removeInboxItem(id: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/api/messages/${encodeURIComponent(id)}`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/messages/${encodeURIComponent(id)}`, {
     method: "DELETE"
   });
 
@@ -128,13 +150,13 @@ export async function removeInboxItem(id: string): Promise<void> {
 }
 
 export async function fetchExpectations(): Promise<MobileExpectation[]> {
-  const response = await fetch(`${API_BASE_URL}/api/expectations`);
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/expectations`);
   const payload = await readJson<ExpectationListResponse>(response);
   return payload.items;
 }
 
 export async function createExpectation(query: string): Promise<MobileExpectation> {
-  const response = await fetch(`${API_BASE_URL}/api/expectations`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/expectations`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -147,7 +169,7 @@ export async function createExpectation(query: string): Promise<MobileExpectatio
 }
 
 export async function deleteExpectation(id: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/api/expectations/${encodeURIComponent(id)}`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/expectations/${encodeURIComponent(id)}`, {
     method: "DELETE"
   });
 
@@ -155,7 +177,7 @@ export async function deleteExpectation(id: string): Promise<void> {
 }
 
 export async function fetchExpectationAlerts(): Promise<ExpectationAlert[]> {
-  const response = await fetch(`${API_BASE_URL}/api/expectations/alerts`);
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/expectations/alerts`);
   const payload = await readJson<AlertListResponse>(response);
   return payload.items;
 }
@@ -165,7 +187,7 @@ export async function acknowledgeExpectationAlert(
   messageId: string,
   matchedAt: string
 ): Promise<void> {
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     `${API_BASE_URL}/api/expectations/${encodeURIComponent(expectationId)}/acknowledge`,
     {
       method: "PATCH",
@@ -190,7 +212,7 @@ export async function sendNotInterestedFeedback(
     .filter(Boolean)
     .join("\n");
 
-  const response = await fetch(`${SUPPRESSION_API_BASE_URL}/api/feedback/not-interested`, {
+  const response = await fetchWithTimeout(`${SUPPRESSION_API_BASE_URL}/api/feedback/not-interested`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -218,7 +240,9 @@ export async function fetchSuppressionRules(query = ""): Promise<MobileSuppressi
     searchParams.set("q", query.trim());
   }
 
-  const response = await fetch(`${SUPPRESSION_API_BASE_URL}/api/rules?${searchParams.toString()}`);
+  const response = await fetchWithTimeout(
+    `${SUPPRESSION_API_BASE_URL}/api/rules?${searchParams.toString()}`
+  );
   const payload = await readJson<RuleListResponse>(response);
   return payload.items;
 }
@@ -227,7 +251,7 @@ export async function updateSuppressionRule(
   id: string,
   updates: { isActive?: boolean; threshold?: number }
 ): Promise<MobileSuppressionRule> {
-  const response = await fetch(`${SUPPRESSION_API_BASE_URL}/api/rules/${encodeURIComponent(id)}`, {
+  const response = await fetchWithTimeout(`${SUPPRESSION_API_BASE_URL}/api/rules/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json"
@@ -246,7 +270,7 @@ export async function deleteSuppressionRule(id: string): Promise<void> {
   const searchParams = new URLSearchParams({
     userId: APP_USER_ID
   });
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     `${SUPPRESSION_API_BASE_URL}/api/rules/${encodeURIComponent(id)}?${searchParams.toString()}`,
     {
       method: "DELETE"
@@ -264,7 +288,7 @@ export async function applySuppressionRulePrompt(
   item: MobileSuppressionRule | null;
   message: string;
 }> {
-  const response = await fetch(`${SUPPRESSION_API_BASE_URL}/api/rules`, {
+  const response = await fetchWithTimeout(`${SUPPRESSION_API_BASE_URL}/api/rules`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"

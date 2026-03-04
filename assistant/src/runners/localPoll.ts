@@ -11,13 +11,14 @@ import { MongoFeedbackStore } from "../adapters/mongoFeedbackStore.js";
 import { MongoSuppressedMessageStore } from "../adapters/mongoSuppressedMessageStore.js";
 import { MongoSuppressionRuleStore } from "../adapters/mongoSuppressionRuleStore.js";
 import { notifyProcessed, notifySkipped } from "../adapters/consoleNotifier.js";
-import { fetchGmailMessages } from "../adapters/gmailSource.js";
+import { GmailSourceAdapter } from "../adapters/gmailSource.js";
 import {
+  getSourceCursor,
   isProcessed,
   loadState,
   markProcessed,
   saveState,
-  updateCursor,
+  setSourceCursor,
   type PersistedState
 } from "../adapters/fileStateStore.js";
 import { ManualReviewToolExecutor } from "../adapters/manualReviewToolExecutor.js";
@@ -26,13 +27,16 @@ import {
   GMAIL_MAX_MESSAGES,
   MONGODB_URI,
   OPENAI_API_KEY,
-  POLL_INTERVAL_SECONDS
+  POLL_INTERVAL_SECONDS,
+  TELEGRAM_BOT_TOKEN
 } from "../config/env.js";
+import { getStableMessageKey, type NormalizedMessage } from "../core/message.js";
 import { DefaultSuppressionEvaluator } from "../core/defaultSuppressionEvaluator.js";
 import { OpenAIEmbeddingService, type EmbeddingProvider } from "../core/embeddingService.js";
 import type { PipelineDependencies } from "../core/contracts.js";
-import type { GmailMessage } from "../core/types.js";
 import { runPipelineOnMessage } from "../core/pipeline.js";
+import { TelegramSourceAdapter } from "../sources/telegramAdapter.js";
+import type { MessageSourceAdapter } from "../sources/types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,8 +48,6 @@ const feedbackEventsPath = path.join(projectRoot, "data/feedback-events.jsonl");
 const suppressionRulesPath = path.join(projectRoot, "data/suppression-rules.jsonl");
 const suppressedMessagesPath = path.join(projectRoot, "data/suppressed-messages.jsonl");
 const DEFAULT_USER_ID = "local-user";
-
-type FetchGmailMessagesFn = typeof fetchGmailMessages;
 
 interface PollStats {
   fetched: number;
@@ -92,7 +94,8 @@ export function buildFeedbackStores() {
 
 async function processMessages(
   state: PersistedState,
-  messages: GmailMessage[],
+  sourceKey: string,
+  messages: NormalizedMessage[],
   dependencies: PipelineDependencies,
   targetStatePath: string
 ): Promise<PollStats> {
@@ -103,7 +106,7 @@ async function processMessages(
   let failed = 0;
 
   for (const message of messages) {
-    if (isProcessed(state, message.messageId)) {
+    if (isProcessed(state, sourceKey, message.externalId)) {
       alreadyProcessed += 1;
       continue;
     }
@@ -113,19 +116,20 @@ async function processMessages(
 
       if (result.status === "skipped") {
         notifySkipped({ message, reason: result.gate.reason });
-        markProcessed(state, message.messageId, { skipped: true, reason: result.gate.reason });
-        updateCursor(state, message.internalDateMs);
+        markProcessed(state, sourceKey, message.externalId, {
+          skipped: true,
+          reason: result.gate.reason
+        });
         skipped += 1;
         await saveState(targetStatePath, state);
         continue;
       }
 
       if (result.status === "suppressed") {
-        markProcessed(state, message.messageId, {
+        markProcessed(state, sourceKey, message.externalId, {
           skipped: true,
           reason: `suppressed:${result.ruleId}`
         });
-        updateCursor(state, message.internalDateMs);
         suppressed += 1;
         await saveState(targetStatePath, state);
         continue;
@@ -139,14 +143,13 @@ async function processMessages(
         preparedActions: result.preparedActions
       });
 
-      markProcessed(state, message.messageId, { skipped: false });
-      updateCursor(state, message.internalDateMs);
+      markProcessed(state, sourceKey, message.externalId, { skipped: false });
       processed += 1;
       await saveState(targetStatePath, state);
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
       failed += 1;
-      console.error(`Message processing failed for ${message.messageId}: ${messageText}`);
+      console.error(`Message processing failed for ${getStableMessageKey(message)}: ${messageText}`);
     }
   }
 
@@ -164,30 +167,69 @@ export async function pollOnceWithSource(options?: {
   userId?: string;
   projectRoot?: string;
   statePath?: string;
-  fetchMessages?: FetchGmailMessagesFn;
+  adapters?: MessageSourceAdapter[];
   dependencies?: PipelineDependencies;
 }): Promise<PollStats> {
   const currentProjectRoot = options?.projectRoot ?? projectRoot;
   const currentStatePath = options?.statePath ?? statePath;
   const state = await loadState(currentStatePath);
-  const lastInternalDateMs = state.sources["gmail:primary"].cursor.lastInternalDateMs || 0;
-  const fetchMessages = options?.fetchMessages ?? fetchGmailMessages;
   const dependencies = options?.dependencies ?? buildPipelineDependencies(options?.userId);
+  const adapters =
+    options?.adapters ??
+    [
+      new GmailSourceAdapter({
+        projectRoot: currentProjectRoot,
+        maxMessages: GMAIL_MAX_MESSAGES
+      }),
+      ...(TELEGRAM_BOT_TOKEN ? [new TelegramSourceAdapter()] : [])
+    ];
 
-  const messages = await fetchMessages({
-    projectRoot: currentProjectRoot,
-    maxMessages: GMAIL_MAX_MESSAGES,
-    lastInternalDateMs
-  });
+  const totals: PollStats = {
+    fetched: 0,
+    alreadyProcessed: 0,
+    processed: 0,
+    suppressed: 0,
+    skipped: 0,
+    failed: 0
+  };
 
-  return processMessages(state, messages, dependencies, currentStatePath);
+  for (const adapter of adapters) {
+    const sourceKey = adapter.key();
+    const currentCursor = getSourceCursor(state, sourceKey);
+    const result = await adapter.fetchNew(currentCursor);
+
+    const stats = await processMessages(
+      state,
+      sourceKey,
+      result.messages,
+      dependencies,
+      currentStatePath
+    );
+
+    if (stats.failed === 0) {
+      setSourceCursor(state, sourceKey, result.nextCursor);
+      await saveState(currentStatePath, state);
+    }
+
+    totals.fetched += stats.fetched;
+    totals.alreadyProcessed += stats.alreadyProcessed;
+    totals.processed += stats.processed;
+    totals.suppressed += stats.suppressed;
+    totals.skipped += stats.skipped;
+    totals.failed += stats.failed;
+  }
+
+  return totals;
 }
 
 async function runForever(): Promise<void> {
-  console.log("Starting Gmail local poller...");
+  console.log("Starting source-agnostic local poller...");
   console.log(`Polling every ${POLL_INTERVAL_SECONDS} seconds`);
   console.log(`Chroma storage ${CHROMA_ENABLED ? "enabled" : "disabled"}`);
   console.log(`Suppression storage ${MONGODB_URI ? "mongo" : "file"}`);
+  if (!TELEGRAM_BOT_TOKEN) {
+    console.log("Telegram disabled (no token)");
+  }
 
   while (true) {
     try {

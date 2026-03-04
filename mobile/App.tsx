@@ -4,7 +4,6 @@ import { SafeAreaView, ScrollView, StyleSheet, View } from "react-native";
 import { StatusBar as ExpoStatusBar } from "expo-status-bar";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
-import * as Notifications from "expo-notifications";
 import { FlashList } from "@shopify/flash-list";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import {
@@ -20,6 +19,13 @@ import {
   Text,
   TextInput
 } from "react-native-paper";
+import {
+  areLocalNotificationsAvailable,
+  configureNotifications,
+  requestNotificationPermissions,
+  scheduleLocalNotification
+} from "./src/notifications";
+import { shouldAllowInboxMessage } from "./src/inboxPolicy";
 import {
   acknowledgeExpectationAlert,
   applySuppressionRulePrompt,
@@ -37,7 +43,6 @@ import {
   updateInboxItem
 } from "./src/api/client";
 import { hasToolCallableActions } from "./src/actionSemantics";
-import { shouldAllowInboxMessage } from "../shared/inboxPolicy";
 import { FilterSheet } from "./src/components/FilterSheet";
 import { MessageCard } from "./src/components/MessageCard";
 import { StatusActions } from "./src/components/StatusActions";
@@ -59,14 +64,7 @@ const SEARCH_LOOKBACK_DAYS = 7;
 const INBOX_FETCH_LIMIT = 250;
 const SEARCH_FETCH_LIMIT = 250;
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: false,
-    shouldSetBadge: false
-  })
-});
+configureNotifications();
 
 function importanceRank(level: ImportanceLevel): number {
   if (level === "critical") return 0;
@@ -241,10 +239,10 @@ export default function App() {
   }
 
   async function notifyExpectedEmail(item: ExpectationAlert): Promise<void> {
-    await Notifications.scheduleNotificationAsync({
-      content: { title: "Expected email arrived", body: `${item.query}\n${item.message.subject}` },
-      trigger: null
-    });
+    await scheduleLocalNotification(
+      "Expected email arrived",
+      `${item.query}\n${item.message.subject}`
+    );
   }
 
   async function loadItems(mode: "initial" | "manual" | "background" = "initial"): Promise<void> {
@@ -253,21 +251,31 @@ export default function App() {
 
     try {
       const query = deferredSearchQuery.trim();
-      const [nextItems, nextExpectations, nextAlerts] = await Promise.all([
-        query
-          ? searchInboxWindow(query, {
-              limit: SEARCH_FETCH_LIMIT,
-              daysBack: SEARCH_LOOKBACK_DAYS,
-              attentionOnly: true
-            })
-          : fetchInboxWindow({
-              limit: INBOX_FETCH_LIMIT,
-              hoursBack: INBOX_LOOKBACK_HOURS,
-              attentionOnly: true
-            }),
+      const inboxRequest = query
+        ? searchInboxWindow(query, {
+            limit: SEARCH_FETCH_LIMIT,
+            daysBack: SEARCH_LOOKBACK_DAYS,
+            attentionOnly: true
+          })
+        : fetchInboxWindow({
+            limit: INBOX_FETCH_LIMIT,
+            hoursBack: INBOX_LOOKBACK_HOURS,
+            attentionOnly: true
+          });
+      const [itemsResult, expectationsResult, alertsResult] = await Promise.allSettled([
+        inboxRequest,
         fetchExpectations(),
         fetchExpectationAlerts()
       ]);
+
+      if (itemsResult.status !== "fulfilled") {
+        throw itemsResult.reason;
+      }
+
+      const nextItems = itemsResult.value;
+      const nextExpectations =
+        expectationsResult.status === "fulfilled" ? expectationsResult.value : expectations;
+      const nextAlerts = alertsResult.status === "fulfilled" ? alertsResult.value : alerts;
       const sorted = sortByPriority(nextItems);
 
       startTransition(() => {
@@ -510,7 +518,11 @@ export default function App() {
   }
 
   useEffect(() => {
-    void Notifications.requestPermissionsAsync();
+    if (!areLocalNotificationsAvailable()) {
+      return;
+    }
+
+    void requestNotificationPermissions();
   }, []);
 
   useEffect(() => {

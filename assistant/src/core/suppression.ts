@@ -1,4 +1,4 @@
-import type { NormalizedMessage } from "./types.js";
+import { formatMessageSender, type NormalizedMessage } from "./message.js";
 
 export type FeedbackAction = "NOT_INTERESTED";
 export type FeedbackMode = "SENDER_ONLY" | "SENDER_AND_CONTEXT" | "THREAD";
@@ -180,4 +180,8 @@ export function buildRuleSearchText(rule: SuppressionRule): string {
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean)
     .join("\n");
+}
+
+export function getMessageSenderAddress(message: NormalizedMessage): string {
+  return formatMessageSender(message);
 }

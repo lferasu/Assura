@@ -57,3 +57,4 @@ export const CHROMA_URL = readEnv("CHROMA_URL") ?? "http://127.0.0.1:8000";
 export const CHROMA_COLLECTION = readEnv("CHROMA_COLLECTION") ?? "assura_messages";
 export const CHROMA_EMBEDDING_MODEL = readEnv("CHROMA_EMBEDDING_MODEL") ?? "text-embedding-3-small";
 export const MONGODB_URI = readEnv("MONGODB_URI");
+export const TELEGRAM_BOT_TOKEN = readEnv("TELEGRAM_BOT_TOKEN");

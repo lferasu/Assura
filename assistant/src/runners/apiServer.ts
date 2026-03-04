@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { ChromaInboxRepository, type InboxRecord } from "../adapters/chromaInboxRepository.js";
 import { normalizeSuggestedActions } from "../core/actionSemantics.js";
+import { formatMessageSender, getStableMessageKey } from "../core/message.js";
 import { shouldAllowInboxMessage } from "../../../shared/inboxPolicy.js";
 import {
   acknowledgeExpectation,
@@ -12,6 +13,7 @@ import {
   listExpectations
 } from "../adapters/expectationStore.js";
 import { API_PORT, CHROMA_ENABLED } from "../config/env.js";
+import { createSuppressionApiRouter } from "../server/httpServer.js";
 import type { StoredMessageAssessment } from "../core/contracts.js";
 import type { ImportanceLevel, MessageSource, SuggestedAction } from "../core/types.js";
 
@@ -143,17 +145,53 @@ function normalizeSummary(summary: string): string {
   return contentLine || trimmed;
 }
 
+function getRecordMessageId(record: StoredMessageAssessment): string {
+  const legacyMessage = record.message as unknown as Record<string, unknown>;
+  if (typeof legacyMessage.externalId === "string" && typeof legacyMessage.source === "string") {
+    return getStableMessageKey({
+      source: legacyMessage.source as MessageSource,
+      accountId: String(legacyMessage.accountId || ""),
+      externalId: legacyMessage.externalId
+    });
+  }
+
+  if (typeof legacyMessage.messageId === "string") {
+    return legacyMessage.messageId;
+  }
+
+  return String(record.storedAt);
+}
+
+function getRecordSender(record: StoredMessageAssessment): string {
+  const legacyMessage = record.message as unknown as Record<string, unknown>;
+  if ("senderId" in legacyMessage) {
+    return formatMessageSender(record.message);
+  }
+
+  return typeof legacyMessage.from === "string" ? legacyMessage.from : "";
+}
+
+function getRecordSubject(record: StoredMessageAssessment): string {
+  const legacyMessage = record.message as unknown as Record<string, unknown>;
+  if (typeof legacyMessage.subject === "string") {
+    return legacyMessage.subject;
+  }
+
+  return "";
+}
+
 function toInboxApiItem(
   record: StoredMessageAssessment,
   statusMap: InboxStatusMap
 ): InboxApiItem {
-  const status = statusMap[record.message.messageId] || { done: false, removed: false };
+  const messageId = getRecordMessageId(record);
+  const status = statusMap[messageId] || { done: false, removed: false };
 
   return {
-    id: record.message.messageId,
+    id: messageId,
     source: record.message.source,
-    subject: record.message.subject,
-    from: record.message.from,
+    subject: getRecordSubject(record),
+    from: getRecordSender(record),
     category: record.assessment.category,
     importance: record.assessment.importance,
     needsAction: record.assessment.needsAction,
@@ -161,7 +199,7 @@ function toInboxApiItem(
     actionSummary: record.assessment.actionSummary,
     keyDates: record.assessment.keyDates,
     suggestedActions: record.assessment.actionItems.map((action, index) => ({
-      id: `${record.message.messageId}:${index}`,
+      id: `${messageId}:${index}`,
       ...action
     })),
     storedAt: record.storedAt,
@@ -393,7 +431,7 @@ app.use(express.json());
 
 app.use((request: Request, response: Response, next: NextFunction) => {
   response.setHeader("Access-Control-Allow-Origin", "*");
-  response.setHeader("Access-Control-Allow-Methods", "GET, PATCH, DELETE, OPTIONS");
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   response.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (request.method === "OPTIONS") {
@@ -407,6 +445,8 @@ app.use((request: Request, response: Response, next: NextFunction) => {
 app.get("/health", (_request: Request, response: Response) => {
   response.status(200).json({ ok: true });
 });
+
+app.use(createSuppressionApiRouter());
 
 app.get("/api/expectations", async (_request: Request, response: Response, next: NextFunction) => {
   try {

@@ -18,6 +18,8 @@ import type {
 import type { EmbeddingProvider } from "../src/core/embeddingService.js";
 import { createHttpServer } from "../src/server/httpServer.js";
 import { pollOnceWithSource } from "../src/runners/localPoll.js";
+import type { MessageSourceAdapter } from "../src/sources/types.js";
+import { createNormalizedMessage } from "../src/core/message.js";
 
 class FakeEmbeddingProvider implements EmbeddingProvider {
   async embedText(text: string): Promise<number[]> {
@@ -56,6 +58,26 @@ class InMemorySuppressedMessageStore implements SuppressedMessageStore {
 class NoopToolExecutor implements ToolExecutor {
   async prepareActions(): Promise<[]> {
     return [];
+  }
+}
+
+class FakeGmailAdapter implements MessageSourceAdapter {
+  constructor(
+    private readonly messages: ReturnType<typeof createNormalizedMessage>[]
+  ) {}
+
+  key(): string {
+    return "gmail:primary";
+  }
+
+  async fetchNew(_cursor: Record<string, unknown>): Promise<{
+    messages: ReturnType<typeof createNormalizedMessage>[];
+    nextCursor: { lastInternalDateMs: number };
+  }> {
+    return {
+      messages: this.messages,
+      nextCursor: { lastInternalDateMs: Date.now() }
+    };
   }
 }
 
@@ -132,18 +154,20 @@ test("POST feedback creates a rule and the next ingest suppresses a matching ema
       suppressionEvaluator: new DefaultSuppressionEvaluator(ruleStore, embeddingProvider),
       suppressedMessageStore: suppressedStore
     },
-    fetchMessages: async () => [
-      {
-        source: "gmail",
-        accountId: "primary",
-        messageId: "msg-2",
-        threadId: "thread-22",
-        from: "Digest <digest@example.com>",
-        subject: "Weekly newsletter",
-        sentAt: new Date().toISOString(),
-        bodyText: "This newsletter keeps repeating with the same context.",
-        internalDateMs: Date.now()
-      }
+    adapters: [
+      new FakeGmailAdapter([
+        createNormalizedMessage({
+          source: "gmail",
+          accountId: "primary",
+          externalId: "msg-2",
+          conversationId: "thread-22",
+          senderId: "digest@example.com",
+          senderName: "Digest <digest@example.com>",
+          subject: "Weekly newsletter",
+          bodyText: "This newsletter keeps repeating with the same context.",
+          receivedAt: new Date().toISOString()
+        })
+      ])
     ]
   });
 

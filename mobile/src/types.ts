@@ -1,5 +1,5 @@
 export type ImportanceLevel = "low" | "medium" | "high" | "critical";
-export type MobileMessageSource = "gmail";
+export type MobileMessageSource = "gmail" | "telegram";
 
 export interface SuggestedActionItem {
   id: string;

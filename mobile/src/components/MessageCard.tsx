@@ -64,7 +64,14 @@ function formatStoredAt(value: string): string {
 
 function renderSource(source: MobileAssessment["source"]): string {
   if (source === "gmail") return "Gmail";
+  if (source === "telegram") return "Telegram";
   return source;
+}
+
+function sourceIcon(source: MobileAssessment["source"]): keyof typeof MaterialCommunityIcons.glyphMap {
+  if (source === "gmail") return "gmail";
+  if (source === "telegram") return "send-circle-outline";
+  return "application-outline";
 }
 
 export function MessageCard({
@@ -167,7 +174,7 @@ export function MessageCard({
                   </Text>
                   <View style={styles.metaDot} />
                   <MaterialCommunityIcons
-                    name="gmail"
+                    name={sourceIcon(item.source)}
                     size={14}
                     color={themeTokens.palette.textSecondary}
                   />

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DefaultSuppressionEvaluator } from "../src/core/defaultSuppressionEvaluator.js";
+import { createNormalizedMessage } from "../src/core/message.js";
 import { cosineSimilarity, type SuppressionRule } from "../src/core/suppression.js";
 import type { SuppressionRuleStore } from "../src/core/contracts.js";
 import type { EmbeddingProvider } from "../src/core/embeddingService.js";
@@ -82,36 +83,51 @@ test("suppression evaluator matches sender, thread, and sender+context rules", a
 
   const senderMatch = await evaluator.evaluate({
     userId: "user-1",
-    message: {
-      threadId: "thread-1",
-      from: "Alerts <alerts@example.com>",
+    message: createNormalizedMessage({
+      source: "gmail",
+      accountId: "primary",
+      externalId: "msg-1",
+      conversationId: "thread-1",
+      senderId: "alerts@example.com",
+      senderName: "Alerts <alerts@example.com>",
       subject: "Heads up",
-      bodyText: "This should be muted."
-    }
+      bodyText: "This should be muted.",
+      receivedAt: new Date().toISOString()
+    })
   });
   assert.equal(senderMatch.suppressed, true);
   assert.equal(senderMatch.rule?.id, "sender-rule");
 
   const threadMatch = await evaluator.evaluate({
     userId: "user-1",
-    message: {
-      threadId: "thread-7",
-      from: "anyone@example.com",
+    message: createNormalizedMessage({
+      source: "gmail",
+      accountId: "primary",
+      externalId: "msg-2",
+      conversationId: "thread-7",
+      senderId: "anyone@example.com",
+      senderName: "anyone@example.com",
       subject: "Same thread",
-      bodyText: "Thread mute applies first."
-    }
+      bodyText: "Thread mute applies first.",
+      receivedAt: new Date().toISOString()
+    })
   });
   assert.equal(threadMatch.suppressed, true);
   assert.equal(threadMatch.rule?.id, "thread-rule");
 
   const contextMatch = await evaluator.evaluate({
     userId: "user-1",
-    message: {
-      threadId: "thread-9",
-      from: "Digest <digest@example.com>",
+    message: createNormalizedMessage({
+      source: "gmail",
+      accountId: "primary",
+      externalId: "msg-3",
+      conversationId: "thread-9",
+      senderId: "digest@example.com",
+      senderName: "Digest <digest@example.com>",
       subject: "Weekly newsletter",
-      bodyText: "This newsletter keeps repeating."
-    }
+      bodyText: "This newsletter keeps repeating.",
+      receivedAt: new Date().toISOString()
+    })
   });
   assert.equal(contextMatch.suppressed, true);
   assert.equal(contextMatch.rule?.id, "context-rule");

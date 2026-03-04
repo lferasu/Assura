@@ -3,7 +3,7 @@ import {
   getToolCallableActionLabel,
   inferToolCallableActionKind,
   normalizeToolCallableActionKind
-} from "../../shared/toolRegistry";
+} from "./toolRegistry";
 import type { MobileAssessment, SuggestedActionItem } from "./types";
 
 function inferKind(action: SuggestedActionItem): string | null {

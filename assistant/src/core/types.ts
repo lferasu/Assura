@@ -3,22 +3,7 @@ export const EXTRACT_SCHEMA_VERSION = 1;
 export const IMPORTANCE_LEVELS = ["low", "medium", "high", "critical"] as const;
 
 export type ImportanceLevel = (typeof IMPORTANCE_LEVELS)[number];
-export type MessageSource = "gmail";
-
-export interface NormalizedMessage {
-  source: MessageSource;
-  accountId: "primary";
-  messageId: string;
-  threadId: string | null;
-  from: string;
-  subject: string;
-  sentAt: string;
-  bodyText: string;
-}
-
-export interface GmailMessage extends NormalizedMessage {
-  internalDateMs: number;
-}
+export type { MessageSource, NormalizedMessage } from "./message.js";
 
 export interface GateResult {
   shouldProcess: boolean;

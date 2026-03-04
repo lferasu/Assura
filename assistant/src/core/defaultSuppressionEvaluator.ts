@@ -1,11 +1,12 @@
 import type { SuppressionEvaluator, SuppressionRuleStore } from "./contracts.js";
 import type { EmbeddingProvider } from "./embeddingService.js";
-import type { NormalizedMessage } from "./types.js";
+import type { NormalizedMessage } from "./message.js";
 import {
   buildMessageContextText,
   cosineSimilarity,
   extractKeywords,
   getSuppressionThreshold,
+  getMessageSenderAddress,
   inferTopic,
   normalizeSenderEmail,
   type SuppressionEvaluation,
@@ -23,10 +24,10 @@ export class DefaultSuppressionEvaluator implements SuppressionEvaluator {
     message: NormalizedMessage;
   }): Promise<SuppressionEvaluation> {
     const rules = (await this.ruleStore.listRules(input.userId)).filter((rule) => rule.isActive);
-    const senderEmail = normalizeSenderEmail(input.message.from);
+    const senderEmail = normalizeSenderEmail(getMessageSenderAddress(input.message));
 
     for (const rule of rules) {
-      if (rule.type === "THREAD" && rule.threadId && input.message.threadId === rule.threadId) {
+      if (rule.type === "THREAD" && rule.threadId && input.message.conversationId === rule.threadId) {
         return {
           suppressed: true,
           rule,

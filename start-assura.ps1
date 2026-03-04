@@ -2,7 +2,7 @@ $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $assistantDir = Join-Path $repoRoot "assistant"
 $mobileDir = Join-Path $repoRoot "mobile"
 
-function Start-AssuraWindow {
+function New-AssuraCommand {
   param(
     [string]$Title,
     [string]$WorkingDirectory,
@@ -16,6 +16,18 @@ function Start-AssuraWindow {
     $Command
   ) -join "; "
 
+  return $fullCommand
+}
+
+function Start-AssuraWindow {
+  param(
+    [string]$Title,
+    [string]$WorkingDirectory,
+    [string]$Command
+  )
+
+  $fullCommand = New-AssuraCommand -Title $Title -WorkingDirectory $WorkingDirectory -Command $Command
+
   Start-Process powershell -ArgumentList @(
     "-NoExit",
     "-ExecutionPolicy", "Bypass",
@@ -23,7 +35,53 @@ function Start-AssuraWindow {
   )
 }
 
-Start-AssuraWindow -Title "Assura Poller" -WorkingDirectory $assistantDir -Command "npm run poll"
-Start-AssuraWindow -Title "Assura API" -WorkingDirectory $assistantDir -Command "npm run api"
-Start-AssuraWindow -Title "Assura Suppression API" -WorkingDirectory $assistantDir -Command "npm run server"
-Start-AssuraWindow -Title "Assura Mobile" -WorkingDirectory $mobileDir -Command "npm run start"
+function Start-AssuraTabs {
+  $tabSpecs = @(
+    @{
+      Title = "Assura Poller"
+      WorkingDirectory = $assistantDir
+      Command = "npm run poll"
+    },
+    @{
+      Title = "Assura API"
+      WorkingDirectory = $assistantDir
+      Command = "npm run api"
+    },
+    @{
+      Title = "Assura Mobile"
+      WorkingDirectory = $mobileDir
+      Command = "npm run start"
+    }
+  )
+
+  $argumentList = @("-w", "0")
+
+  for ($index = 0; $index -lt $tabSpecs.Count; $index += 1) {
+    $tabSpec = $tabSpecs[$index]
+    $fullCommand = New-AssuraCommand -Title $tabSpec.Title -WorkingDirectory $tabSpec.WorkingDirectory -Command $tabSpec.Command
+
+    $argumentList += @(
+      "new-tab",
+      "--title", $tabSpec.Title,
+      "--startingDirectory", $tabSpec.WorkingDirectory,
+      "powershell.exe",
+      "-NoExit",
+      "-ExecutionPolicy", "Bypass",
+      "-Command", $fullCommand
+    )
+
+    if ($index -lt ($tabSpecs.Count - 1)) {
+      $argumentList += ";"
+    }
+  }
+
+  & wt @argumentList
+}
+
+if (Get-Command wt -ErrorAction SilentlyContinue) {
+  Start-AssuraTabs
+} else {
+  Start-AssuraWindow -Title "Assura Poller" -WorkingDirectory $assistantDir -Command "npm run poll"
+  Start-AssuraWindow -Title "Assura API" -WorkingDirectory $assistantDir -Command "npm run api"
+  Start-AssuraWindow -Title "Assura Mobile" -WorkingDirectory $mobileDir -Command "npm run start"
+}

@@ -1,4 +1,5 @@
-import type { MessageAssessment, NormalizedMessage, PreparedAction, SuggestedAction } from "../core/types.js";
+import { formatMessageSender, type NormalizedMessage } from "../core/message.js";
+import type { MessageAssessment, PreparedAction, SuggestedAction } from "../core/types.js";
 
 function clip(text: string, n = 200): string {
   if (!text) return "";
@@ -19,9 +20,10 @@ export function notifyProcessed({
   preparedActions: PreparedAction[];
 }): void {
   console.log("\n=== Message Assessment ===");
-  console.log(`From: ${message.from}`);
-  console.log(`Subject: ${message.subject}`);
-  console.log(`Sent: ${message.sentAt}`);
+  console.log(`Source: ${message.source}`);
+  console.log(`From: ${formatMessageSender(message)}`);
+  console.log(`Subject: ${message.subject || "(none)"}`);
+  console.log(`Received: ${message.receivedAt}`);
   console.log(`Preview: ${clip(message.bodyText, 200)}`);
   console.log("\n1) Summary");
   console.log(summary);
@@ -35,8 +37,9 @@ export function notifyProcessed({
 
 export function notifySkipped({ message, reason }: { message: NormalizedMessage; reason: string }): void {
   console.log("\n--- Skipped message ---");
-  console.log(`From: ${message.from}`);
-  console.log(`Subject: ${message.subject}`);
-  console.log(`Sent: ${message.sentAt}`);
+  console.log(`Source: ${message.source}`);
+  console.log(`From: ${formatMessageSender(message)}`);
+  console.log(`Subject: ${message.subject || "(none)"}`);
+  console.log(`Received: ${message.receivedAt}`);
   console.log(`Reason: ${reason}`);
 }

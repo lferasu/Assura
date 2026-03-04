@@ -25,6 +25,20 @@ export interface HttpServerDependencies {
   embeddingProvider: EmbeddingProvider | null;
 }
 
+function resolveHttpServerDependencies(
+  dependencies?: Partial<HttpServerDependencies>
+): HttpServerDependencies {
+  const fallbackStores = buildFeedbackStores();
+
+  return {
+    feedbackStore: dependencies?.feedbackStore ?? fallbackStores.feedbackStore,
+    suppressionRuleStore: dependencies?.suppressionRuleStore ?? fallbackStores.suppressionRuleStore,
+    embeddingProvider:
+      dependencies?.embeddingProvider ??
+      (OPENAI_API_KEY ? new OpenAIEmbeddingService() : null)
+  };
+}
+
 function parseMode(value: unknown): FeedbackMode {
   if (value === "SENDER_ONLY" || value === "SENDER_AND_CONTEXT" || value === "THREAD") {
     return value;
@@ -41,15 +55,8 @@ function parseRouteId(value: string | string[] | undefined): string {
   return value || "";
 }
 
-export function createHttpServer(dependencies?: Partial<HttpServerDependencies>) {
-  const fallbackStores = buildFeedbackStores();
-  const resolved: HttpServerDependencies = {
-    feedbackStore: dependencies?.feedbackStore ?? fallbackStores.feedbackStore,
-    suppressionRuleStore: dependencies?.suppressionRuleStore ?? fallbackStores.suppressionRuleStore,
-    embeddingProvider:
-      dependencies?.embeddingProvider ??
-      (OPENAI_API_KEY ? new OpenAIEmbeddingService() : null)
-  };
+export function createSuppressionApiRouter(dependencies?: Partial<HttpServerDependencies>) {
+  const resolved = resolveHttpServerDependencies(dependencies);
   const feedbackService = new FeedbackService(
     resolved.feedbackStore,
     resolved.suppressionRuleStore,
@@ -59,7 +66,7 @@ export function createHttpServer(dependencies?: Partial<HttpServerDependencies>)
     resolved.suppressionRuleStore,
     resolved.embeddingProvider
   );
-  const app = express();
+  const router = express.Router();
 
   async function searchRules(userId: string, query: string, includeInactive: boolean): Promise<Array<SuppressionRule & { searchScore: number }>> {
     const trimmed = query.trim();
@@ -100,25 +107,7 @@ export function createHttpServer(dependencies?: Partial<HttpServerDependencies>)
       .sort((left, right) => right.searchScore - left.searchScore || right.createdAt.localeCompare(left.createdAt));
   }
 
-  app.use(express.json());
-  app.use((_request: Request, response: Response, next: NextFunction) => {
-    response.setHeader("Access-Control-Allow-Origin", "*");
-    response.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
-    response.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-    if (_request.method === "OPTIONS") {
-      response.status(204).end();
-      return;
-    }
-
-    next();
-  });
-
-  app.get("/health", (_request: Request, response: Response) => {
-    response.status(200).json({ ok: true });
-  });
-
-  app.post("/api/feedback/not-interested", async (request: Request, response: Response, next: NextFunction) => {
+  router.post("/api/feedback/not-interested", async (request: Request, response: Response, next: NextFunction) => {
     try {
       const body = (request.body || {}) as {
         userId?: string;
@@ -161,7 +150,7 @@ export function createHttpServer(dependencies?: Partial<HttpServerDependencies>)
     }
   });
 
-  app.get("/api/rules", async (request: Request, response: Response, next: NextFunction) => {
+  router.get("/api/rules", async (request: Request, response: Response, next: NextFunction) => {
     try {
       const userId = typeof request.query.userId === "string" ? request.query.userId : "";
       if (!userId) {
@@ -182,7 +171,7 @@ export function createHttpServer(dependencies?: Partial<HttpServerDependencies>)
     }
   });
 
-  app.post("/api/rules", async (request: Request, response: Response, next: NextFunction) => {
+  router.post("/api/rules", async (request: Request, response: Response, next: NextFunction) => {
     try {
       const body = (request.body || {}) as {
         userId?: string;
@@ -212,7 +201,7 @@ export function createHttpServer(dependencies?: Partial<HttpServerDependencies>)
     }
   });
 
-  app.patch("/api/rules/:id", async (request: Request, response: Response, next: NextFunction) => {
+  router.patch("/api/rules/:id", async (request: Request, response: Response, next: NextFunction) => {
     try {
       const userId = typeof request.body?.userId === "string" ? request.body.userId : "";
       if (!userId) {
@@ -238,7 +227,7 @@ export function createHttpServer(dependencies?: Partial<HttpServerDependencies>)
     }
   });
 
-  app.delete("/api/rules/:id", async (request: Request, response: Response, next: NextFunction) => {
+  router.delete("/api/rules/:id", async (request: Request, response: Response, next: NextFunction) => {
     try {
       const userId = typeof request.query.userId === "string" ? request.query.userId : "";
       if (!userId) {
@@ -253,10 +242,36 @@ export function createHttpServer(dependencies?: Partial<HttpServerDependencies>)
     }
   });
 
-  app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
+  router.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
     const message = error instanceof Error ? error.message : String(error);
     response.status(500).json({ error: message });
   });
+
+  return router;
+}
+
+export function createHttpServer(dependencies?: Partial<HttpServerDependencies>) {
+  const app = express();
+
+  app.use(express.json());
+  app.use((_request: Request, response: Response, next: NextFunction) => {
+    response.setHeader("Access-Control-Allow-Origin", "*");
+    response.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+    response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+    if (_request.method === "OPTIONS") {
+      response.status(204).end();
+      return;
+    }
+
+    next();
+  });
+
+  app.get("/health", (_request: Request, response: Response) => {
+    response.status(200).json({ ok: true });
+  });
+
+  app.use(createSuppressionApiRouter(dependencies));
 
   return app;
 }

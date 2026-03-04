@@ -6,6 +6,7 @@ import {
   CHROMA_URL,
   OPENAI_API_KEY
 } from "../config/env.js";
+import { formatMessageSender, getStableMessageKey } from "../core/message.js";
 import type { MessageStore, StoredMessageAssessment } from "../core/contracts.js";
 
 type ChromaMetadata = Record<string, string | number | boolean | null>;
@@ -29,9 +30,10 @@ function buildDocument(record: StoredMessageAssessment): string {
       : "Facts: none";
 
   return [
-    `Subject: ${record.message.subject}`,
-    `From: ${record.message.from}`,
-    `Sent: ${record.message.sentAt}`,
+    `Source: ${record.message.source}`,
+    `Subject: ${record.message.subject || ""}`,
+    `From: ${formatMessageSender(record.message)}`,
+    `Received: ${record.message.receivedAt}`,
     `Category: ${record.assessment.category}`,
     `Importance: ${record.assessment.importance}`,
     `Needs action: ${record.assessment.needsAction ? "yes" : "no"}`,
@@ -50,11 +52,13 @@ function buildMetadata(record: StoredMessageAssessment): ChromaMetadata {
   return {
     source: record.message.source,
     accountId: record.message.accountId,
-    messageId: record.message.messageId,
-    threadId: record.message.threadId,
-    from: record.message.from,
-    subject: record.message.subject,
-    sentAt: record.message.sentAt,
+    externalId: record.message.externalId,
+    conversationId: record.message.conversationId,
+    senderId: record.message.senderId,
+    senderName: record.message.senderName || null,
+    from: formatMessageSender(record.message),
+    subject: record.message.subject || null,
+    receivedAt: record.message.receivedAt,
     storedAt: record.storedAt,
     category: record.assessment.category,
     importance: record.assessment.importance,
@@ -112,7 +116,7 @@ export class ChromaMessageStore implements MessageStore {
     const collection = await this.getCollection();
 
     await collection.upsert({
-      ids: [record.message.messageId],
+      ids: [getStableMessageKey(record.message)],
       documents: [buildDocument(record)],
       metadatas: [buildMetadata(record)]
     });

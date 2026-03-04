@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { google } from "googleapis";
-import type { GmailMessage } from "../core/types.js";
+import {
+  createNormalizedMessage,
+  type NormalizedMessage
+} from "../core/message.js";
+import type { MessageSourceAdapter } from "../sources/types.js";
+import type { FetchResult, SourceCursor } from "../sources/types.js";
 
 const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
 
@@ -15,6 +20,16 @@ type GmailPayload = {
 
 function getHeader(headers: GmailHeader[] | undefined, name: string): string {
   return headers?.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value || "";
+}
+
+function extractSenderId(value: string): string {
+  const trimmed = value.trim();
+  const match = trimmed.match(/<([^>]+)>/);
+  if (match?.[1]) {
+    return match[1].trim();
+  }
+
+  return trimmed || "gmail:unknown";
 }
 
 function decodeBase64Url(input: string | null | undefined): string {
@@ -98,6 +113,11 @@ async function loadOAuthClient(projectRoot: string) {
   return client;
 }
 
+function asLastInternalDateMs(cursor: SourceCursor): number {
+  const raw = cursor.lastInternalDateMs;
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : 0;
+}
+
 export async function fetchGmailMessages({
   projectRoot,
   maxMessages,
@@ -106,7 +126,7 @@ export async function fetchGmailMessages({
   projectRoot: string;
   maxMessages: number;
   lastInternalDateMs: number;
-}): Promise<GmailMessage[]> {
+}): Promise<{ messages: NormalizedMessage[]; nextCursor: { lastInternalDateMs: number } }> {
   const auth = await loadOAuthClient(projectRoot);
   const gmail = google.gmail({ version: "v1", auth });
 
@@ -119,7 +139,8 @@ export async function fetchGmailMessages({
   });
 
   const messageRefs = listRes.data.messages || [];
-  const out: GmailMessage[] = [];
+  const out: Array<{ message: NormalizedMessage; internalDateMs: number }> = [];
+  let maxInternalDateMs = lastInternalDateMs;
 
   for (const ref of messageRefs) {
     if (!ref.id) continue;
@@ -136,19 +157,52 @@ export async function fetchGmailMessages({
 
     if (!msg.id) continue;
 
+    const internalDateMs = Number(msg.internalDate || 0);
+    const senderName = getHeader(headers, "From");
+    const threadId = msg.threadId || msg.id;
+
     out.push({
-      source: "gmail",
-      accountId: "primary",
-      messageId: msg.id,
-      threadId: msg.threadId || null,
-      from: getHeader(headers, "From"),
-      subject: getHeader(headers, "Subject"),
-      sentAt: new Date(Number(msg.internalDate || Date.now())).toISOString(),
-      bodyText,
-      internalDateMs: Number(msg.internalDate || 0)
+      message: createNormalizedMessage({
+        source: "gmail",
+        accountId: "primary",
+        externalId: msg.id,
+        conversationId: threadId,
+        senderId: extractSenderId(senderName),
+        senderName: senderName || undefined,
+        subject: getHeader(headers, "Subject") || undefined,
+        bodyText,
+        receivedAt: new Date(Number(msg.internalDate || Date.now())).toISOString(),
+        raw: msg
+      }),
+      internalDateMs
     });
+    maxInternalDateMs = Math.max(maxInternalDateMs, internalDateMs);
   }
 
   out.sort((a, b) => a.internalDateMs - b.internalDateMs);
-  return out;
+  return {
+    messages: out.map((item) => item.message),
+    nextCursor: { lastInternalDateMs: maxInternalDateMs }
+  };
+}
+
+export class GmailSourceAdapter implements MessageSourceAdapter {
+  constructor(
+    private readonly input: {
+      projectRoot: string;
+      maxMessages: number;
+    }
+  ) {}
+
+  key(): string {
+    return "gmail:primary";
+  }
+
+  async fetchNew(cursor: SourceCursor): Promise<FetchResult> {
+    return fetchGmailMessages({
+      projectRoot: this.input.projectRoot,
+      maxMessages: this.input.maxMessages,
+      lastInternalDateMs: asLastInternalDateMs(cursor)
+    });
+  }
 }
