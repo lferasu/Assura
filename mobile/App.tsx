@@ -28,14 +28,16 @@ import {
   deleteExpectation,
   fetchExpectationAlerts,
   fetchExpectations,
-  fetchInbox,
+  fetchInboxWindow,
   fetchSuppressionRules,
   removeInboxItem,
   sendNotInterestedFeedback,
-  searchInbox,
+  searchInboxWindow,
   updateSuppressionRule,
   updateInboxItem
 } from "./src/api/client";
+import { hasToolCallableActions } from "./src/actionSemantics";
+import { shouldAllowInboxMessage } from "../shared/inboxPolicy";
 import { FilterSheet } from "./src/components/FilterSheet";
 import { MessageCard } from "./src/components/MessageCard";
 import { StatusActions } from "./src/components/StatusActions";
@@ -51,6 +53,11 @@ import type {
 type CategoryFilter = "all" | string;
 type ImportanceFilter = "all" | ImportanceLevel;
 type ScreenView = "inbox" | "attention" | "rules";
+
+const INBOX_LOOKBACK_HOURS = 24;
+const SEARCH_LOOKBACK_DAYS = 7;
+const INBOX_FETCH_LIMIT = 250;
+const SEARCH_FETCH_LIMIT = 250;
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -70,9 +77,30 @@ function importanceRank(level: ImportanceLevel): number {
 
 function sortByPriority(items: MobileAssessment[]): MobileAssessment[] {
   return [...items].sort((left, right) => {
+    if (left.done !== right.done) {
+      return left.done ? 1 : -1;
+    }
+
+    const leftActionable = hasToolCallableActions(left);
+    const rightActionable = hasToolCallableActions(right);
+    if (leftActionable !== rightActionable) {
+      return leftActionable ? -1 : 1;
+    }
+
     const priorityGap = importanceRank(left.importance) - importanceRank(right.importance);
     if (priorityGap !== 0) return priorityGap;
     return new Date(right.storedAt).getTime() - new Date(left.storedAt).getTime();
+  });
+}
+
+function shouldSurfaceInFocusedInbox(item: MobileAssessment): boolean {
+  return shouldAllowInboxMessage({
+    category: item.category,
+    subject: item.subject,
+    from: item.from,
+    summary: item.summary,
+    actionSummary: item.actionSummary,
+    hasToolCallableAction: hasToolCallableActions(item)
   });
 }
 
@@ -116,6 +144,7 @@ function describeSuppressionRule(rule: MobileSuppressionRule): { title: string; 
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<ScreenView>("inbox");
+  const [focusMode, setFocusMode] = useState(true);
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
   const [importanceFilter, setImportanceFilter] = useState<ImportanceFilter>("all");
   const [needsActionOnly, setNeedsActionOnly] = useState(false);
@@ -144,16 +173,21 @@ export default function App() {
   const undoneBeforeResponseRef = useRef(new Set<string>());
 
   const deferredCategory = useDeferredValue(categoryFilter);
+  const deferredFocusMode = useDeferredValue(focusMode);
   const deferredImportance = useDeferredValue(importanceFilter);
   const deferredNeedsAction = useDeferredValue(needsActionOnly);
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const deferredRuleSearchQuery = useDeferredValue(ruleSearchQuery);
+  const quietedCount = deferredFocusMode
+    ? items.filter((item) => !shouldSurfaceInFocusedInbox(item)).length
+    : 0;
 
   const filteredItems = sortByPriority(
     items.filter((item) => {
+      if (!hasToolCallableActions(item)) return false;
+      if (deferredFocusMode && !shouldSurfaceInFocusedInbox(item)) return false;
       if (deferredCategory !== "all" && item.category !== deferredCategory) return false;
       if (deferredImportance !== "all" && item.importance !== deferredImportance) return false;
-      if (deferredNeedsAction && !item.needsAction) return false;
       return true;
     })
   );
@@ -162,7 +196,7 @@ export default function App() {
     items.filter(
       (item) =>
         !item.done &&
-        item.needsAction &&
+        hasToolCallableActions(item) &&
         (item.importance === "critical" || item.importance === "high")
     )
   );
@@ -182,7 +216,7 @@ export default function App() {
         : "Rules";
   const headerSubtitle =
     currentScreen === "inbox"
-      ? `${filteredItems.length} messages · ${filteredItems.filter((item) => item.needsAction).length} actionable`
+      ? `${filteredItems.length} messages · ${filteredItems.filter((item) => hasToolCallableActions(item)).length} actionable${deferredFocusMode ? ` · ${quietedCount} quieted` : ""}`
       : currentScreen === "attention"
         ? `${urgentItems.length} urgent items · ${alerts.length} expected alerts`
         : `${rules.length} rules · ${activeRuleCount} active`;
@@ -220,7 +254,17 @@ export default function App() {
     try {
       const query = deferredSearchQuery.trim();
       const [nextItems, nextExpectations, nextAlerts] = await Promise.all([
-        query ? searchInbox(query, 60) : fetchInbox(60),
+        query
+          ? searchInboxWindow(query, {
+              limit: SEARCH_FETCH_LIMIT,
+              daysBack: SEARCH_LOOKBACK_DAYS,
+              attentionOnly: true
+            })
+          : fetchInboxWindow({
+              limit: INBOX_FETCH_LIMIT,
+              hoursBack: INBOX_LOOKBACK_HOURS,
+              attentionOnly: true
+            }),
         fetchExpectations(),
         fetchExpectationAlerts()
       ]);
@@ -569,7 +613,7 @@ export default function App() {
                 <Searchbar
                   value={searchQuery}
                   onChangeText={setSearchQuery}
-                  placeholder="Search inbox"
+                  placeholder="Search last 7 days"
                   style={styles.searchbar}
                 />
                 <Button mode="contained-tonal" icon="tune-variant" onPress={() => setFilterVisible(true)}>
@@ -586,7 +630,7 @@ export default function App() {
                 ItemSeparatorComponent={() => <View style={styles.spacer} />}
                 ListHeaderComponent={
                   <Text variant="bodySmall" style={styles.metric}>
-                    {filteredItems.length} shown · {filteredItems.filter((item) => item.needsAction).length} actionable
+                    {filteredItems.length} shown · {filteredItems.filter((item) => hasToolCallableActions(item)).length} actionable{deferredFocusMode ? ` · ${quietedCount} quieted` : ""}
                   </Text>
                 }
                 ListEmptyComponent={
@@ -596,7 +640,7 @@ export default function App() {
                         Nothing matches this view
                       </Text>
                       <Text variant="bodyMedium" style={styles.emptyText}>
-                        Clear filters or search more broadly.
+                        Clear filters or search within the last 7 days.
                       </Text>
                     </Surface>
                   ) : <ActivityIndicator style={styles.loading} />
@@ -753,16 +797,19 @@ export default function App() {
           <FilterSheet
             visible={filterVisible}
             categoryOptions={categoryOptions}
+            currentFocusMode={focusMode}
             currentCategory={categoryFilter}
             currentImportance={importanceFilter}
             currentNeedsActionOnly={needsActionOnly}
             onDismiss={() => setFilterVisible(false)}
-            onApply={({ category, importance, needsActionOnly: nextNeedsActionOnly }) => {
+            onApply={({ focusMode: nextFocusMode, category, importance, needsActionOnly: nextNeedsActionOnly }) => {
+              setFocusMode(nextFocusMode);
               setCategoryFilter(category);
               setImportanceFilter(importance);
               setNeedsActionOnly(nextNeedsActionOnly);
             }}
             onClear={() => {
+              setFocusMode(true);
               setCategoryFilter("all");
               setImportanceFilter("all");
               setNeedsActionOnly(false);

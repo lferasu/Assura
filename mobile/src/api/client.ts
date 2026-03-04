@@ -47,11 +47,58 @@ export async function fetchInbox(limit = 50): Promise<MobileAssessment[]> {
   return payload.items;
 }
 
+export async function fetchInboxWindow(options?: {
+  limit?: number;
+  hoursBack?: number;
+  attentionOnly?: boolean;
+}): Promise<MobileAssessment[]> {
+  const searchParams = new URLSearchParams();
+  searchParams.set("limit", String(options?.limit ?? 50));
+
+  if (typeof options?.hoursBack === "number") {
+    searchParams.set("hoursBack", String(options.hoursBack));
+  }
+
+  if (options?.attentionOnly) {
+    searchParams.set("attentionOnly", "true");
+  }
+
+  const response = await fetch(`${API_BASE_URL}/api/messages?${searchParams.toString()}`);
+  const payload = await readJson<InboxResponse>(response);
+  return payload.items;
+}
+
 export async function searchInbox(query: string, limit = 50): Promise<MobileAssessment[]> {
   const searchParams = new URLSearchParams({
     limit: String(limit),
     q: query
   });
+  const response = await fetch(`${API_BASE_URL}/api/messages?${searchParams.toString()}`);
+  const payload = await readJson<InboxResponse>(response);
+  return payload.items;
+}
+
+export async function searchInboxWindow(
+  query: string,
+  options?: {
+    limit?: number;
+    daysBack?: number;
+    attentionOnly?: boolean;
+  }
+): Promise<MobileAssessment[]> {
+  const searchParams = new URLSearchParams({
+    limit: String(options?.limit ?? 50),
+    q: query
+  });
+
+  if (typeof options?.daysBack === "number") {
+    searchParams.set("daysBack", String(options.daysBack));
+  }
+
+  if (options?.attentionOnly) {
+    searchParams.set("attentionOnly", "true");
+  }
+
   const response = await fetch(`${API_BASE_URL}/api/messages?${searchParams.toString()}`);
   const payload = await readJson<InboxResponse>(response);
   return payload.items;

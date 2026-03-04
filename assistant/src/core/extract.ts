@@ -1,6 +1,8 @@
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { OPENAI_API_KEY, OPENAI_MODEL } from "../config/env.js";
+import { applyToolCallableSemantics } from "./actionSemantics.js";
+import { getToolCallableActionKinds } from "../../../shared/toolRegistry.js";
 import { EXTRACT_SCHEMA_VERSION, IMPORTANCE_LEVELS } from "./types.js";
 import type { MessageAssessment, NormalizedMessage } from "./types.js";
 
@@ -111,6 +113,7 @@ function validateExtractionShape(parsed: unknown): MessageAssessment {
 
 function buildExtractionPrompt(message: NormalizedMessage): string {
   const clippedBody = (message.bodyText || "").slice(0, 6000);
+  const allowedKinds = getToolCallableActionKinds().join(", ");
   return `Analyze this email for a personal Gmail assistant and return ONLY valid JSON.
 No markdown. No explanation outside JSON.
 
@@ -139,9 +142,10 @@ Required JSON shape:
 
 Guidance:
 - category should be broad and useful, such as education, work, family, billing, travel, appointment, task, reminder, promotion, or other.
-- needsAction should be true only when the user likely needs to do something.
-- actionItems may include calendar updates, to-do items, replies, document review, or any other useful next step.
-- If the email is informational only, use needsAction=false and an empty actionItems array.
+- needsAction should be true only when at least one action can be expressed as a concrete tool call.
+- Allowed actionItems.kind values are: ${allowedKinds}.
+- Do not emit vague actions like review, explore, track package, booking, browse, read, or unsubscribe.
+- If the email is informational only, promotional, or does not map to one of the allowed action kinds, use needsAction=false and an empty actionItems array.
 - Keep summaries concise and factual.
 
 Email metadata:
@@ -161,7 +165,7 @@ export async function extractMessageAssessment(message: NormalizedMessage): Prom
     const response = await model.invoke([system, new HumanMessage(prompt)]);
     raw = getTextContent(response).trim();
     const parsed = JSON.parse(raw);
-    return validateExtractionShape(parsed);
+    return applyToolCallableSemantics(validateExtractionShape(parsed));
   } catch (error) {
     if (raw) {
       console.error(describeValidationFailure(error, raw).message);
@@ -172,7 +176,7 @@ export async function extractMessageAssessment(message: NormalizedMessage): Prom
     const repairedRaw = getTextContent(repaired).trim();
     try {
       const repairedParsed = JSON.parse(repairedRaw);
-      return validateExtractionShape(repairedParsed);
+      return applyToolCallableSemantics(validateExtractionShape(repairedParsed));
     } catch (repairError) {
       throw describeValidationFailure(repairError, repairedRaw);
     }

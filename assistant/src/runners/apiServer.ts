@@ -3,6 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { ChromaInboxRepository, type InboxRecord } from "../adapters/chromaInboxRepository.js";
+import { normalizeSuggestedActions } from "../core/actionSemantics.js";
+import { shouldAllowInboxMessage } from "../../../shared/inboxPolicy.js";
 import {
   acknowledgeExpectation,
   createExpectation,
@@ -49,6 +51,12 @@ interface ExpectationAlert {
   matchedMessageId: string;
   matchedAt: string;
   message: InboxApiItem;
+}
+
+interface MessageQueryOptions {
+  hoursBack?: number;
+  daysBack?: number;
+  attentionOnly?: boolean;
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -173,45 +181,107 @@ function applyStatus(item: InboxRecord, statusMap: InboxStatusMap): InboxApiItem
   };
 }
 
-async function getInboxItems(limit: number, includeRemoved: boolean): Promise<InboxApiItem[]> {
+function isAttentionWorthy(item: InboxApiItem): boolean {
+  return shouldAllowInboxMessage({
+    category: item.category,
+    subject: item.subject,
+    from: item.from,
+    summary: item.summary,
+    actionSummary: item.actionSummary,
+    hasToolCallableAction: normalizeSuggestedActions(item.suggestedActions).length > 0
+  });
+}
+
+function filterByQueryOptions(items: InboxApiItem[], options: MessageQueryOptions): InboxApiItem[] {
+  const now = Date.now();
+  const hoursBackMs =
+    typeof options.hoursBack === "number" && options.hoursBack > 0
+      ? options.hoursBack * 60 * 60 * 1000
+      : null;
+  const daysBackMs =
+    typeof options.daysBack === "number" && options.daysBack > 0
+      ? options.daysBack * 24 * 60 * 60 * 1000
+      : null;
+
+  return items.filter((item) => {
+    const storedAtMs = new Date(item.storedAt).getTime();
+    if (!Number.isFinite(storedAtMs)) {
+      return false;
+    }
+
+    if (hoursBackMs !== null && now - storedAtMs > hoursBackMs) {
+      return false;
+    }
+
+    if (daysBackMs !== null && now - storedAtMs > daysBackMs) {
+      return false;
+    }
+
+    if (options.attentionOnly && !isAttentionWorthy(item)) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+async function getInboxItems(
+  limit: number,
+  includeRemoved: boolean,
+  options: MessageQueryOptions = {}
+): Promise<InboxApiItem[]> {
   const [records, statusMap] = await Promise.all([
     readJsonLines<StoredMessageAssessment>(assessmentsPath),
     readInboxStatusMap()
   ]);
 
-  return records
+  return filterByQueryOptions(
+    records
     .map((record) => toInboxApiItem(record, statusMap))
     .filter((item) => includeRemoved || !item.removed)
-    .sort((a, b) => new Date(b.storedAt).getTime() - new Date(a.storedAt).getTime())
-    .slice(0, limit);
+    .sort((a, b) => new Date(b.storedAt).getTime() - new Date(a.storedAt).getTime()),
+    options
+  ).slice(0, limit);
 }
 
-async function getInboxItemsFromChroma(limit: number, includeRemoved: boolean): Promise<InboxApiItem[]> {
+async function getInboxItemsFromChroma(
+  limit: number,
+  includeRemoved: boolean,
+  options: MessageQueryOptions = {}
+): Promise<InboxApiItem[]> {
   if (!chromaInboxRepository) {
-    return getInboxItems(limit, includeRemoved);
+    return getInboxItems(limit, includeRemoved, options);
   }
 
   const [records, statusMap] = await Promise.all([
-    chromaInboxRepository.listLatest(limit * 4),
+    chromaInboxRepository.listLatest(limit * 8),
     readInboxStatusMap()
   ]);
 
-  return records
+  return filterByQueryOptions(
+    records
     .map((record) => applyStatus(record, statusMap))
-    .filter((item) => includeRemoved || !item.removed)
-    .slice(0, limit);
+    .filter((item) => includeRemoved || !item.removed),
+    options
+  ).slice(0, limit);
 }
 
-async function searchInboxItems(query: string, limit: number, includeRemoved: boolean): Promise<InboxApiItem[]> {
+async function searchInboxItems(
+  query: string,
+  limit: number,
+  includeRemoved: boolean,
+  options: MessageQueryOptions = {}
+): Promise<InboxApiItem[]> {
   const trimmed = query.trim();
   if (!trimmed) {
-    return getInboxItemsFromChroma(limit, includeRemoved);
+    return getInboxItemsFromChroma(limit, includeRemoved, options);
   }
 
   if (!chromaInboxRepository) {
-    const items = await getInboxItems(limit * 4, includeRemoved);
+    const items = await getInboxItems(limit * 8, includeRemoved, options);
     const needle = trimmed.toLowerCase();
-    return items
+    return filterByQueryOptions(
+      items
       .filter((item) => {
         const haystack = [
           item.subject,
@@ -224,19 +294,22 @@ async function searchInboxItems(query: string, limit: number, includeRemoved: bo
           .toLowerCase();
 
         return haystack.includes(needle);
-      })
-      .slice(0, limit);
+      }),
+      options
+    ).slice(0, limit);
   }
 
   const [records, statusMap] = await Promise.all([
-    chromaInboxRepository.searchRelevant(trimmed, limit * 2),
+    chromaInboxRepository.searchRelevant(trimmed, limit * 4),
     readInboxStatusMap()
   ]);
 
-  return records
+  return filterByQueryOptions(
+    records
     .map((record) => applyStatus(record, statusMap))
-    .filter((item) => includeRemoved || !item.removed)
-    .slice(0, limit);
+    .filter((item) => includeRemoved || !item.removed),
+    options
+  ).slice(0, limit);
 }
 
 async function buildExpectationAlerts(): Promise<ExpectationAlert[]> {
@@ -294,6 +367,19 @@ function parseLimit(value: unknown, fallback = 50): number {
   const parsed = Number(value ?? fallback);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(1, parsed);
+}
+
+function parseOptionalPositiveNumber(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+
+  return parsed;
 }
 
 function parseRouteId(value: string | string[] | undefined): string {
@@ -385,9 +471,12 @@ app.get("/api/messages", async (request: Request, response: Response, next: Next
     const limit = parseLimit(request.query.limit);
     const includeRemoved = request.query.includeRemoved === "true";
     const query = typeof request.query.q === "string" ? request.query.q : "";
+    const hoursBack = parseOptionalPositiveNumber(request.query.hoursBack);
+    const daysBack = parseOptionalPositiveNumber(request.query.daysBack);
+    const attentionOnly = request.query.attentionOnly === "true";
     const items = query.trim()
-      ? await searchInboxItems(query, limit, includeRemoved)
-      : await getInboxItemsFromChroma(limit, includeRemoved);
+      ? await searchInboxItems(query, limit, includeRemoved, { hoursBack, daysBack, attentionOnly })
+      : await getInboxItemsFromChroma(limit, includeRemoved, { hoursBack, daysBack, attentionOnly });
 
     response.status(200).json({ items });
   } catch (error) {

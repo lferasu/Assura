@@ -4,6 +4,11 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Swipeable } from "react-native-gesture-handler";
 import { Button, Surface, Text, TouchableRipple } from "react-native-paper";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
+import {
+  countToolCallableActions,
+  getToolCallableActionDisplayMeta,
+  getToolCallableActions
+} from "../actionSemantics";
 import type { ImportanceLevel, MobileAssessment } from "../types";
 import { themeTokens } from "../theme";
 
@@ -84,7 +89,8 @@ export function MessageCard({
   const [nextMoveExpanded, setNextMoveExpanded] = useState(true);
   const [suggestedActionsExpanded, setSuggestedActionsExpanded] = useState(true);
   const tone = importanceTone(item.importance);
-  const actionCount = item.suggestedActions.length;
+  const actionCount = countToolCallableActions(item);
+  const actionableItems = getToolCallableActions(item);
   const timeLabel = formatStoredAt(item.storedAt);
 
   return (
@@ -132,7 +138,7 @@ export function MessageCard({
         <View
           style={[
             styles.accentRail,
-            item.needsAction ? styles.accentRailActionable : styles.accentRailNeutral
+            actionCount > 0 ? styles.accentRailActionable : styles.accentRailNeutral
           ]}
         />
         <LinearGradient
@@ -211,18 +217,40 @@ export function MessageCard({
                 </Text>
               ) : null}
 
-              {item.needsAction ? (
-                <View style={styles.actionStrip}>
-                  <MaterialCommunityIcons name="lightning-bolt-outline" size={16} color={themeTokens.palette.warning} />
-                  <Text variant="labelMedium" style={styles.actionStripText}>
-                    Action
-                  </Text>
-                  <Text variant="bodySmall" style={styles.actionMeta}>
-                    {actionCount || 0} {actionCount === 1 ? "step" : "steps"}
-                  </Text>
-                  <Text variant="bodySmall" style={styles.actionMeta}>
-                    {item.keyDates.length} {item.keyDates.length === 1 ? "key date" : "key dates"}
-                  </Text>
+              {actionCount > 0 ? (
+                <View style={styles.actionWrap}>
+                  <View style={styles.actionChipRow}>
+                    {actionableItems.map((action) => {
+                      const actionMeta = getToolCallableActionDisplayMeta(action.kind);
+
+                      return (
+                        <View
+                          key={`pill-${action.id}`}
+                          style={[
+                            styles.actionChip,
+                            {
+                              backgroundColor: actionMeta.badgeColor,
+                              borderColor: actionMeta.badgeBorderColor
+                            }
+                          ]}
+                        >
+                          {actionMeta.icon ? (
+                            <MaterialCommunityIcons
+                              name={actionMeta.icon as keyof typeof MaterialCommunityIcons.glyphMap}
+                              size={12}
+                              color={actionMeta.badgeTextColor}
+                            />
+                          ) : null}
+                          <Text
+                            variant="labelSmall"
+                            style={[styles.actionChipText, { color: actionMeta.badgeTextColor }]}
+                          >
+                            {actionMeta.label}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                  </View>
                 </View>
               ) : null}
             </View>
@@ -231,7 +259,7 @@ export function MessageCard({
 
         {expanded ? (
           <View style={styles.expandedArea}>
-            {item.actionSummary || item.suggestedActions.length > 0 ? (
+            {actionableItems.length > 0 ? (
               <View style={styles.dualColumnRow}>
                 {item.actionSummary ? (
                   <View style={styles.toggleColumn}>
@@ -255,7 +283,7 @@ export function MessageCard({
                   </View>
                 ) : null}
 
-                {item.suggestedActions.length > 0 ? (
+                {actionableItems.length > 0 ? (
                   <View style={styles.toggleColumn}>
                     <TouchableRipple
                       onPress={() => setSuggestedActionsExpanded((current) => !current)}
@@ -279,7 +307,7 @@ export function MessageCard({
               </View>
             ) : null}
 
-            {item.actionSummary && nextMoveExpanded ? (
+            {actionableItems.length > 0 && item.actionSummary && nextMoveExpanded ? (
               <View style={styles.detailBlock}>
                 <Text variant="bodyMedium" style={styles.detailText}>
                   {item.actionSummary}
@@ -287,9 +315,9 @@ export function MessageCard({
               </View>
             ) : null}
 
-            {item.suggestedActions.length > 0 && suggestedActionsExpanded ? (
+            {actionableItems.length > 0 && suggestedActionsExpanded ? (
               <View style={styles.detailBlock}>
-                {item.suggestedActions.map((action) => (
+                {actionableItems.map((action) => (
                   <View key={action.id} style={styles.listRow}>
                     <MaterialCommunityIcons name="arrow-right" size={14} color={themeTokens.palette.primary} />
                     <View style={styles.listBody}>
@@ -469,25 +497,25 @@ const styles = StyleSheet.create({
   summaryCollapsed: {
     minHeight: 36
   },
-  actionStrip: {
+  actionWrap: {
     marginTop: themeTokens.spacing.xs,
-    paddingHorizontal: themeTokens.spacing.sm,
-    paddingVertical: 6,
+  },
+  actionChipRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: themeTokens.spacing.xs
+  },
+  actionChip: {
     borderRadius: themeTokens.radii.chip,
-    backgroundColor: "#F4EEFF",
+    paddingHorizontal: themeTokens.spacing.sm,
+    paddingVertical: themeTokens.spacing.xxs,
+    borderWidth: 1,
     flexDirection: "row",
     alignItems: "center",
-    flexWrap: "wrap",
-    gap: themeTokens.spacing.xs,
-    borderWidth: 1,
-    borderColor: "#E2D5FF"
+    gap: 4
   },
-  actionStripText: {
-    color: themeTokens.palette.primary,
-    fontWeight: "700"
-  },
-  actionMeta: {
-    color: "#71689A"
+  actionChipText: {
+    textTransform: "capitalize"
   },
   expandedArea: {
     marginTop: themeTokens.spacing.sm,

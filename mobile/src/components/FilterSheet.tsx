@@ -10,6 +10,7 @@ type ImportanceFilter = "all" | ImportanceLevel;
 export function FilterSheet({
   visible,
   categoryOptions,
+  currentFocusMode,
   currentCategory,
   currentImportance,
   currentNeedsActionOnly,
@@ -19,27 +20,31 @@ export function FilterSheet({
 }: {
   visible: boolean;
   categoryOptions: string[];
+  currentFocusMode: boolean;
   currentCategory: CategoryFilter;
   currentImportance: ImportanceFilter;
   currentNeedsActionOnly: boolean;
   onDismiss: () => void;
   onApply: (filters: {
+    focusMode: boolean;
     category: CategoryFilter;
     importance: ImportanceFilter;
     needsActionOnly: boolean;
   }) => void;
   onClear: () => void;
 }) {
+  const [focusMode, setFocusMode] = useState(currentFocusMode);
   const [category, setCategory] = useState<CategoryFilter>(currentCategory);
   const [importance, setImportance] = useState<ImportanceFilter>(currentImportance);
   const [needsActionOnly, setNeedsActionOnly] = useState(currentNeedsActionOnly);
 
   useEffect(() => {
     if (!visible) return;
+    setFocusMode(currentFocusMode);
     setCategory(currentCategory);
     setImportance(currentImportance);
     setNeedsActionOnly(currentNeedsActionOnly);
-  }, [visible, currentCategory, currentImportance, currentNeedsActionOnly]);
+  }, [visible, currentFocusMode, currentCategory, currentImportance, currentNeedsActionOnly]);
 
   return (
     <Portal>
@@ -91,6 +96,18 @@ export function FilterSheet({
           <View style={styles.switchRow}>
             <View style={styles.switchCopy}>
               <Text variant="labelLarge" style={styles.sectionLabel}>
+                Focus inbox
+              </Text>
+              <Text variant="bodySmall" style={styles.supportText}>
+                Hide low-value updates like promotions, newsletters, and other likely noise.
+              </Text>
+            </View>
+            <Switch value={focusMode} onValueChange={setFocusMode} />
+          </View>
+
+          <View style={styles.switchRow}>
+            <View style={styles.switchCopy}>
+              <Text variant="labelLarge" style={styles.sectionLabel}>
                 Only actionable
               </Text>
               <Text variant="bodySmall" style={styles.supportText}>
@@ -113,7 +130,7 @@ export function FilterSheet({
             <Button
               mode="contained"
               onPress={() => {
-                onApply({ category, importance, needsActionOnly });
+                onApply({ focusMode, category, importance, needsActionOnly });
                 onDismiss();
               }}
             >
