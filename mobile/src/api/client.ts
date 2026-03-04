@@ -135,7 +135,7 @@ export async function acknowledgeExpectationAlert(
 export async function sendNotInterestedFeedback(
   item: MobileAssessment,
   mode: "SENDER_ONLY" | "SENDER_AND_CONTEXT"
-): Promise<void> {
+): Promise<{ ok: true; ruleId: string }> {
   const bodyText = [
     item.actionSummary || "",
     ...item.suggestedActions.map((action) => action.title)
@@ -159,7 +159,7 @@ export async function sendNotInterestedFeedback(
     })
   });
 
-  await readJson<{ ok: true; ruleId: string }>(response);
+  return readJson<{ ok: true; ruleId: string }>(response);
 }
 
 export async function fetchSuppressionRules(query = ""): Promise<MobileSuppressionRule[]> {
