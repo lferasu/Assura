@@ -3,9 +3,10 @@ export const EXTRACT_SCHEMA_VERSION = 1;
 export const IMPORTANCE_LEVELS = ["low", "medium", "high", "critical"] as const;
 
 export type ImportanceLevel = (typeof IMPORTANCE_LEVELS)[number];
+export type MessageSource = "gmail";
 
 export interface NormalizedMessage {
-  source: "gmail";
+  source: MessageSource;
   accountId: "primary";
   messageId: string;
   threadId: string | null;
@@ -79,4 +80,15 @@ export interface PipelineProcessedResult {
   preparedActions: PreparedAction[];
 }
 
-export type PipelineResult = PipelineSkippedResult | PipelineProcessedResult;
+export interface PipelineSuppressedResult {
+  status: "suppressed";
+  gate: GateResult;
+  reason: string;
+  ruleId: string;
+  similarity?: number;
+}
+
+export type PipelineResult =
+  | PipelineSkippedResult
+  | PipelineProcessedResult
+  | PipelineSuppressedResult;

@@ -13,6 +13,34 @@ export async function runPipelineOnMessage(
     return { status: "skipped", gate };
   }
 
+  const suppression = await dependencies.suppressionEvaluator.evaluate({
+    userId: dependencies.userId,
+    message
+  });
+  if (suppression.suppressed && suppression.rule) {
+    const storedAt = new Date().toISOString();
+
+    await dependencies.suppressedMessageStore.saveSuppressed({
+      userId: dependencies.userId,
+      message,
+      ruleId: suppression.rule.id,
+      suppressionType: suppression.rule.type,
+      reason: suppression.reason || "Matched suppression rule",
+      similarity: suppression.similarity ?? null,
+      keywords: suppression.keywords || suppression.rule.context.keywords || [],
+      topic: suppression.topic || suppression.rule.context.topic || null,
+      storedAt
+    });
+
+    return {
+      status: "suppressed",
+      gate,
+      reason: suppression.reason || "Matched suppression rule",
+      ruleId: suppression.rule.id,
+      similarity: suppression.similarity
+    };
+  }
+
   const extracted = await extractMessageAssessment(message);
   const summary = summarizeExtraction(extracted);
   const preparedActions = await dependencies.toolExecutor.prepareActions({

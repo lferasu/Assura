@@ -2,6 +2,8 @@
 
 Assura is a Gmail-based personal assistant that polls incoming email, classifies each message, estimates importance, identifies whether follow-up is needed, and produces structured action suggestions for things like calendar changes, to-do updates, or manual review.
 
+It now also supports a user-driven "Not interested in this kind of message" loop. The mobile client can send suppression feedback to a lightweight API, and future poll cycles can mute similar messages before they are summarized or surfaced as actionable items.
+
 The current implementation is intentionally conservative: it extracts and stores recommendations, but it does not execute external tool actions yet. Suggested actions are routed into a manual-review execution plan so real integrations can be added safely later.
 
 ## What It Does
@@ -16,6 +18,7 @@ On each poll cycle, Assura:
 6. Stores the processed assessment and planned actions as JSONL records.
 7. Prints the assessment and execution plan to the terminal.
 8. Marks the Gmail message as processed and advances the cursor.
+9. Applies active suppression rules before summarization and stores muted messages in a separate suppressed log.
 
 ## Current Architecture
 
@@ -26,13 +29,23 @@ The code is organized so future storage and tool integrations can be added witho
 - `assistant/src/core/extract.ts`: LLM-based message classification and structured extraction.
 - `assistant/src/core/summarize.ts`: readable summaries for processed messages.
 - `assistant/src/core/pipeline.ts`: orchestration of extraction, storage, and action preparation.
-- `assistant/src/core/contracts.ts`: extension interfaces for `MessageStore`, `ActionStore`, and `ToolExecutor`.
+- `assistant/src/core/contracts.ts`: extension interfaces for message storage, suppression, feedback, and tool execution.
+- `assistant/src/core/suppression.ts`: suppression rule models, keyword extraction, and cosine similarity helpers.
+- `assistant/src/core/defaultSuppressionEvaluator.ts`: suppression matching logic (sender, thread, sender + semantic context).
+- `assistant/src/core/feedbackService.ts`: converts mobile "not interested" feedback into stored suppression rules.
 - `assistant/src/adapters/fileMessageStore.ts`: append-only JSONL storage for assessments.
 - `assistant/src/adapters/fileActionStore.ts`: append-only JSONL storage for planned actions.
+- `assistant/src/adapters/fileSuppressionRuleStore.ts`: append-only JSONL suppression rule storage for local mode.
+- `assistant/src/adapters/fileFeedbackStore.ts`: append-only JSONL feedback event storage for local mode.
+- `assistant/src/adapters/fileSuppressedMessageStore.ts`: append-only JSONL muted message storage for local mode.
+- `assistant/src/adapters/mongoFeedbackStore.ts`: MongoDB feedback event storage.
+- `assistant/src/adapters/mongoSuppressionRuleStore.ts`: MongoDB suppression rule storage.
+- `assistant/src/adapters/mongoSuppressedMessageStore.ts`: MongoDB muted message storage.
 - `assistant/src/adapters/manualReviewToolExecutor.ts`: default executor that marks actions for manual review.
 - `assistant/src/adapters/fileStateStore.ts`: JSON state persistence for poll cursor and processed IDs.
 - `assistant/src/adapters/consoleNotifier.ts`: terminal output for processed and skipped messages.
 - `assistant/src/config/env.ts`: centralized environment loading and validation.
+- `assistant/src/server/httpServer.ts`: lightweight suppression feedback API for the mobile app.
 - `mobile/`: Expo-based React Native client for browsing summaries and suggested actions.
 
 ## Mobile App
@@ -93,8 +106,10 @@ Variables:
 
 - `OPENAI_API_KEY`: required
 - `OPENAI_MODEL`: defaults to `gpt-4.1-mini`
+- `EMBEDDING_MODEL`: defaults to `text-embedding-3-small`
 - `POLL_INTERVAL_SECONDS`: defaults to `120`
 - `GMAIL_MAX_MESSAGES`: defaults to `15`
+- `MONGODB_URI`: optional. If set, suppression feedback, rules, and muted message records use MongoDB.
 
 ## Local Setup
 
@@ -123,11 +138,85 @@ npm install
 npm run poll
 ```
 
+5. Start the suppression API (used by the mobile "Not interested" action):
+
+```bash
+npm run server
+```
+
+By default it listens on `API_PORT + 1` (for example, `8788` when `API_PORT=8787`) so it can run beside the existing inbox API.
+
+6. Optional: start the existing inbox API used by the current mobile app:
+
+```bash
+npm run api
+```
+
+Run both the poller and suppression API together in separate terminals, or use `start-assura.ps1` from the repo root to launch the poller, inbox API, suppression API, and mobile app windows.
+
+## Not Interested Feedback
+
+The mobile app can send feedback when a message is not useful. Assura stores the feedback event and creates a suppression rule for one of three scopes:
+
+- `SENDER_ONLY`: mute all future messages from the sender
+- `THREAD`: mute the current thread only
+- `SENDER_AND_CONTEXT`: mute future messages from the same sender when the semantic context is similar
+
+For `SENDER_AND_CONTEXT`, Assura stores:
+
+- an embedding for `subject + snippet + limited body text`
+- lightweight keywords
+- a short topic string for explainability
+
+During polling, suppression is evaluated before extraction and notifications. Suppressed messages are marked processed, skipped from the normal action pipeline, and appended to a muted message store for a future "Muted" view.
+
+### Example Requests
+
+Create a not-interested rule:
+
+```bash
+curl -X POST http://localhost:8788/api/feedback/not-interested \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "local-user",
+    "messageId": "gmail-message-id",
+    "mode": "SENDER_AND_CONTEXT",
+    "senderEmail": "news@example.com",
+    "threadId": "thread-id",
+    "subject": "Weekly newsletter",
+    "snippet": "The same recurring newsletter"
+  }'
+```
+
+List active rules:
+
+```bash
+curl "http://localhost:8788/api/rules?userId=local-user"
+```
+
+Disable a rule:
+
+```bash
+curl -X PATCH http://localhost:8788/api/rules/<rule-id> \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "local-user",
+    "isActive": false
+  }'
+```
+
+Delete a rule:
+
+```bash
+curl -X DELETE "http://localhost:8788/api/rules/<rule-id>?userId=local-user"
+```
+
 ## Type Checking
 
 ```bash
 cd assistant
 npm run typecheck
+npm run test
 ```
 
 ## VS Code Debugging
@@ -143,6 +232,9 @@ The poller uses these local files:
 - `assistant/data/state.json`: processed message IDs and Gmail cursor
 - `assistant/data/message-assessments.jsonl`: stored message assessments
 - `assistant/data/action-items.jsonl`: stored suggested actions plus prepared execution plans
+- `assistant/data/feedback-events.jsonl`: local feedback event log when MongoDB is not configured
+- `assistant/data/suppression-rules.jsonl`: local suppression rules when MongoDB is not configured
+- `assistant/data/suppressed-messages.jsonl`: muted messages stored during polling when MongoDB is not configured
 
 These are runtime artifacts and should not be committed.
 

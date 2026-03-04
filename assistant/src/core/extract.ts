@@ -5,6 +5,10 @@ import { EXTRACT_SCHEMA_VERSION, IMPORTANCE_LEVELS } from "./types.js";
 import type { MessageAssessment, NormalizedMessage } from "./types.js";
 
 function buildModel(): ChatOpenAI {
+  if (!OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is required for message extraction.");
+  }
+
   return new ChatOpenAI({
     apiKey: OPENAI_API_KEY,
     model: OPENAI_MODEL,

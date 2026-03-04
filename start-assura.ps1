@@ -25,4 +25,5 @@ function Start-AssuraWindow {
 
 Start-AssuraWindow -Title "Assura Poller" -WorkingDirectory $assistantDir -Command "npm run poll"
 Start-AssuraWindow -Title "Assura API" -WorkingDirectory $assistantDir -Command "npm run api"
+Start-AssuraWindow -Title "Assura Suppression API" -WorkingDirectory $assistantDir -Command "npm run server"
 Start-AssuraWindow -Title "Assura Mobile" -WorkingDirectory $mobileDir -Command "npm run start"

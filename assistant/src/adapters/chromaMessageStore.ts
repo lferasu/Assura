@@ -81,10 +81,16 @@ function createChromaClient(): ChromaClient {
 
 export class ChromaMessageStore implements MessageStore {
   private readonly client = createChromaClient();
-  private readonly embeddingFunction = new OpenAIEmbeddingFunction({
-    apiKey: OPENAI_API_KEY,
-    modelName: CHROMA_EMBEDDING_MODEL
-  });
+  private readonly embeddingFunction = (() => {
+    if (!OPENAI_API_KEY) {
+      throw new Error("OPENAI_API_KEY is required when CHROMA_ENABLED is true.");
+    }
+
+    return new OpenAIEmbeddingFunction({
+      apiKey: OPENAI_API_KEY,
+      modelName: CHROMA_EMBEDDING_MODEL
+    });
+  })();
   private collectionPromise: Promise<Collection> | null = null;
 
   private async getCollection(): Promise<Collection> {

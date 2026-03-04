@@ -6,10 +6,11 @@ import {
   CHROMA_URL,
   OPENAI_API_KEY
 } from "../config/env.js";
-import type { ImportanceLevel, SuggestedAction } from "../core/types.js";
+import type { ImportanceLevel, MessageSource, SuggestedAction } from "../core/types.js";
 
 export interface InboxRecord {
   id: string;
+  source: MessageSource;
   subject: string;
   from: string;
   category: string;
@@ -69,6 +70,7 @@ function toInboxRecord(id: string, metadata: ChromaMetadata | null | undefined):
 
   return {
     id,
+    source: asString(metadata.source, "gmail") as MessageSource,
     subject: asString(metadata.subject),
     from: asString(metadata.from),
     category: asString(metadata.category, "other"),

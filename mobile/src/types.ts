@@ -1,4 +1,5 @@
 export type ImportanceLevel = "low" | "medium" | "high" | "critical";
+export type MobileMessageSource = "gmail";
 
 export interface SuggestedActionItem {
   id: string;
@@ -15,6 +16,7 @@ export interface KeyDateItem {
 
 export interface MobileAssessment {
   id: string;
+  source: MobileMessageSource;
   subject: string;
   from: string;
   category: string;
@@ -44,4 +46,22 @@ export interface ExpectationAlert {
   matchedMessageId: string;
   matchedAt: string;
   message: MobileAssessment;
+}
+
+export type MobileSuppressionRuleType = "SENDER" | "SENDER_AND_CONTEXT" | "THREAD";
+
+export interface MobileSuppressionRule {
+  id: string;
+  userId: string;
+  type: MobileSuppressionRuleType;
+  senderEmail?: string;
+  threadId?: string;
+  context: {
+    keywords?: string[];
+    topic?: string;
+  };
+  threshold?: number;
+  isActive: boolean;
+  createdAt: string;
+  searchScore?: number;
 }

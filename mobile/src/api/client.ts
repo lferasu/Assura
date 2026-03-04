@@ -1,5 +1,10 @@
-import { API_BASE_URL } from "../config";
-import type { ExpectationAlert, MobileAssessment, MobileExpectation } from "../types";
+import { API_BASE_URL, APP_USER_ID, SUPPRESSION_API_BASE_URL } from "../config";
+import type {
+  ExpectationAlert,
+  MobileAssessment,
+  MobileExpectation,
+  MobileSuppressionRule
+} from "../types";
 
 interface InboxResponse {
   items: MobileAssessment[];
@@ -15,6 +20,10 @@ interface ExpectationResponse {
 
 interface AlertListResponse {
   items: ExpectationAlert[];
+}
+
+interface RuleListResponse {
+  items: MobileSuppressionRule[];
 }
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -121,4 +130,109 @@ export async function acknowledgeExpectationAlert(
   );
 
   await readJson<{ ok: true }>(response);
+}
+
+export async function sendNotInterestedFeedback(
+  item: MobileAssessment,
+  mode: "SENDER_ONLY" | "SENDER_AND_CONTEXT"
+): Promise<void> {
+  const bodyText = [
+    item.actionSummary || "",
+    ...item.suggestedActions.map((action) => action.title)
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const response = await fetch(`${SUPPRESSION_API_BASE_URL}/api/feedback/not-interested`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      userId: APP_USER_ID,
+      messageId: item.id,
+      mode,
+      senderEmail: item.from,
+      subject: item.subject,
+      snippet: item.summary,
+      bodyText
+    })
+  });
+
+  await readJson<{ ok: true; ruleId: string }>(response);
+}
+
+export async function fetchSuppressionRules(query = ""): Promise<MobileSuppressionRule[]> {
+  const searchParams = new URLSearchParams({
+    userId: APP_USER_ID,
+    includeInactive: "true"
+  });
+  if (query.trim()) {
+    searchParams.set("q", query.trim());
+  }
+
+  const response = await fetch(`${SUPPRESSION_API_BASE_URL}/api/rules?${searchParams.toString()}`);
+  const payload = await readJson<RuleListResponse>(response);
+  return payload.items;
+}
+
+export async function updateSuppressionRule(
+  id: string,
+  updates: { isActive?: boolean; threshold?: number }
+): Promise<MobileSuppressionRule> {
+  const response = await fetch(`${SUPPRESSION_API_BASE_URL}/api/rules/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      userId: APP_USER_ID,
+      ...updates
+    })
+  });
+
+  const payload = await readJson<{ ok: true; item: MobileSuppressionRule }>(response);
+  return payload.item;
+}
+
+export async function deleteSuppressionRule(id: string): Promise<void> {
+  const searchParams = new URLSearchParams({
+    userId: APP_USER_ID
+  });
+  const response = await fetch(
+    `${SUPPRESSION_API_BASE_URL}/api/rules/${encodeURIComponent(id)}?${searchParams.toString()}`,
+    {
+      method: "DELETE"
+    }
+  );
+
+  await readJson<{ ok: true }>(response);
+}
+
+export async function applySuppressionRulePrompt(
+  prompt: string,
+  targetRuleId?: string
+): Promise<{
+  operation: "created" | "updated" | "deleted";
+  item: MobileSuppressionRule | null;
+  message: string;
+}> {
+  const response = await fetch(`${SUPPRESSION_API_BASE_URL}/api/rules`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      userId: APP_USER_ID,
+      prompt,
+      targetRuleId
+    })
+  });
+
+  return readJson<{
+    ok: true;
+    operation: "created" | "updated" | "deleted";
+    item: MobileSuppressionRule | null;
+    message: string;
+  }>(response);
 }

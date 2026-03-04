@@ -23,6 +23,7 @@ npm-debug.log*
 # Editor settings
 /.vscode/*
 !/.vscode/launch.json
+/mobile/.idea/
 
 # Accidental root-level npm artifacts
 /package-lock.json

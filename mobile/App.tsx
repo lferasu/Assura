@@ -1,7 +1,9 @@
 import React, { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   LayoutAnimation,
+  PanResponder,
   Platform,
   Pressable,
   RefreshControl,
@@ -16,22 +18,30 @@ import {
 } from "react-native";
 import { StatusBar as ExpoStatusBar } from "expo-status-bar";
 import * as Notifications from "expo-notifications";
+import Svg, { Path } from "react-native-svg";
 import {
   acknowledgeExpectationAlert,
+  applySuppressionRulePrompt,
   createExpectation,
+  deleteSuppressionRule,
   deleteExpectation,
   fetchExpectationAlerts,
   fetchExpectations,
   fetchInbox,
+  fetchSuppressionRules,
   removeInboxItem,
+  sendNotInterestedFeedback,
   searchInbox,
+  updateSuppressionRule,
   updateInboxItem
 } from "./src/api/client";
 import type {
   ExpectationAlert,
   ImportanceLevel,
   MobileAssessment,
-  MobileExpectation
+  MobileExpectation,
+  MobileMessageSource,
+  MobileSuppressionRule
 } from "./src/types";
 
 const IMPORTANCE_OPTIONS: Array<"all" | ImportanceLevel> = ["all", "low", "medium", "high", "critical"];
@@ -47,7 +57,7 @@ Notifications.setNotificationHandler({
 
 type CategoryFilter = "all" | string;
 type ImportanceFilter = "all" | ImportanceLevel;
-type ScreenView = "inbox" | "attention";
+type ScreenView = "inbox" | "attention" | "rules";
 
 function importanceRank(level: ImportanceLevel): number {
   if (level === "critical") return 0;
@@ -126,6 +136,30 @@ function ImportanceBadge({ level }: { level: ImportanceLevel }) {
   return (
     <View style={[styles.badge, tone]}>
       <Text style={styles.badgeText}>{level.toUpperCase()}</Text>
+    </View>
+  );
+}
+
+function SourceBadge({ source }: { source: MobileMessageSource }) {
+  if (source !== "gmail") return null;
+
+  return (
+    <View style={styles.sourceBadge}>
+      <Svg
+        width={16}
+        height={12}
+        viewBox="0 0 20 14"
+        fill="none"
+        style={styles.sourceBadgeIcon}
+        accessibilityElementsHidden
+      >
+        <Path d="M2 12V3" stroke="#EA4335" strokeWidth={2.2} strokeLinecap="round" />
+        <Path d="M18 12V3" stroke="#34A853" strokeWidth={2.2} strokeLinecap="round" />
+        <Path d="M2.6 3L10 8.25" stroke="#FBBC05" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" />
+        <Path d="M17.4 3L10 8.25" stroke="#4285F4" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" />
+        <Path d="M2.2 12H17.8" stroke="#DADCE0" strokeWidth={1.5} strokeLinecap="round" />
+      </Svg>
+      <Text style={styles.sourceBadgeText}>Gmail</Text>
     </View>
   );
 }
@@ -242,6 +276,7 @@ function MessageCard({
   onToggleExpand,
   onToggleDone,
   onRemove,
+  onNotInterested,
   forceExpanded = false
 }: {
   item: MobileAssessment;
@@ -250,20 +285,81 @@ function MessageCard({
   onToggleExpand: (item: MobileAssessment) => void;
   onToggleDone: (item: MobileAssessment) => void;
   onRemove: (item: MobileAssessment) => void;
+  onNotInterested: (item: MobileAssessment) => void;
   forceExpanded?: boolean;
 }) {
   const visibleExpanded = forceExpanded || expanded;
   const actionCount = item.suggestedActions.length;
   const compactMeta = `${formatStoredAt(item.storedAt)}  |  ${item.from}`;
+  const swipeWidth = 104;
+  const translateX = useRef(new Animated.Value(0)).current;
+  const dragStartX = useRef(0);
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_event, gestureState) =>
+        Math.abs(gestureState.dx) > 8 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy),
+      onPanResponderGrant: () => {
+        translateX.stopAnimation((value) => {
+          dragStartX.current = value;
+        });
+      },
+      onPanResponderMove: (_event, gestureState) => {
+        const next = Math.max(-swipeWidth, Math.min(0, dragStartX.current + gestureState.dx));
+        translateX.setValue(next);
+      },
+      onPanResponderRelease: (_event, gestureState) => {
+        const next = dragStartX.current + gestureState.dx;
+        const shouldOpen = next < -(swipeWidth / 2);
+
+        Animated.spring(translateX, {
+          toValue: shouldOpen ? -swipeWidth : 0,
+          useNativeDriver: true,
+          bounciness: 0
+        }).start();
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(translateX, {
+          toValue: 0,
+          useNativeDriver: true,
+          bounciness: 0
+        }).start();
+      }
+    })
+  ).current;
+
+  function closeSwipe(): void {
+    Animated.spring(translateX, {
+      toValue: 0,
+      useNativeDriver: true,
+      bounciness: 0
+    }).start();
+  }
 
   return (
-    <View style={[styles.card, item.done ? styles.cardDone : null, visibleExpanded ? styles.cardExpanded : null]}>
-      <Pressable
-        onPress={() => {
-          if (!forceExpanded) onToggleExpand(item);
-        }}
-        style={styles.cardPressArea}
-      >
+    <View style={styles.swipeShell}>
+      <View style={styles.swipeRail}>
+        <Pressable
+          onPress={() => {
+            closeSwipe();
+            onNotInterested(item);
+          }}
+          disabled={disabled}
+          style={[styles.swipeActionButton, disabled ? styles.actionButtonDisabled : null]}
+        >
+          <Text style={styles.swipeActionEyebrow}>Mute</Text>
+          <Text style={styles.swipeActionLabel}>Not interested</Text>
+        </Pressable>
+      </View>
+
+      <Animated.View style={{ transform: [{ translateX }] }} {...panResponder.panHandlers}>
+        <View style={[styles.card, item.done ? styles.cardDone : null, visibleExpanded ? styles.cardExpanded : null]}>
+          <Pressable
+            onPress={() => {
+              closeSwipe();
+              if (!forceExpanded) onToggleExpand(item);
+            }}
+            style={styles.cardPressArea}
+          >
         <View style={styles.cardGrid}>
           <View style={styles.leftRail}>
             <View style={[styles.priorityDot, priorityDotStyle(item.importance)]} />
@@ -302,12 +398,12 @@ function MessageCard({
           </View>
 
           <View style={styles.expandRail}>
-            <Text style={styles.expandGlyph}>{expanded ? "−" : "+"}</Text>
+            <Text style={styles.expandGlyph}>{visibleExpanded ? "−" : "+"}</Text>
           </View>
-        </View>
-      </Pressable>
+            </View>
+          </Pressable>
 
-      {expanded ? (
+      {visibleExpanded ? (
         <View style={styles.expandedPanel}>
           {item.actionSummary ? (
             <View style={styles.inlineCallout}>
@@ -350,7 +446,10 @@ function MessageCard({
 
           <View style={styles.actionRow}>
             <Pressable
-              onPress={() => onToggleDone(item)}
+              onPress={() => {
+                closeSwipe();
+                onToggleDone(item);
+              }}
               disabled={disabled}
               style={[
                 styles.actionButton,
@@ -361,7 +460,10 @@ function MessageCard({
               <Text style={styles.actionButtonLabel}>{item.done ? "Mark Active" : "Mark Done"}</Text>
             </Pressable>
             <Pressable
-              onPress={() => onRemove(item)}
+              onPress={() => {
+                closeSwipe();
+                onRemove(item);
+              }}
               disabled={disabled}
               style={[
                 styles.actionButton,
@@ -372,10 +474,337 @@ function MessageCard({
               <Text style={styles.actionButtonLabel}>Remove</Text>
             </Pressable>
           </View>
+            </View>
+          ) : null}
         </View>
-      ) : null}
+      </Animated.View>
     </View>
   );
+}
+
+function FeedbackMessageCard({
+  item,
+  expanded,
+  disabled,
+  onToggleExpand,
+  onToggleDone,
+  onRemove,
+  onNotInterested,
+  forceExpanded = false
+}: {
+  item: MobileAssessment;
+  expanded: boolean;
+  disabled: boolean;
+  onToggleExpand: (item: MobileAssessment) => void;
+  onToggleDone: (item: MobileAssessment) => void;
+  onRemove: (item: MobileAssessment) => void;
+  onNotInterested: (item: MobileAssessment, mode: "SENDER_ONLY" | "SENDER_AND_CONTEXT") => void;
+  forceExpanded?: boolean;
+}) {
+  const visibleExpanded = forceExpanded || expanded;
+  const actionCount = item.suggestedActions.length;
+  const hasNextMove = Boolean(item.actionSummary);
+  const hasSuggestedActions = actionCount > 0;
+  const compactMeta = `${formatStoredAt(item.storedAt)}  |  ${item.from}`;
+  const revealWidth = 72;
+  const translateX = useRef(new Animated.Value(0)).current;
+  const dragStartX = useRef(0);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [nextMoveOpen, setNextMoveOpen] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_event, gestureState) =>
+        Math.abs(gestureState.dx) > 8 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy),
+      onPanResponderGrant: () => {
+        translateX.stopAnimation((value) => {
+          dragStartX.current = value;
+        });
+      },
+      onPanResponderMove: (_event, gestureState) => {
+        const next = Math.max(-revealWidth, Math.min(0, dragStartX.current + gestureState.dx));
+        translateX.setValue(next);
+      },
+      onPanResponderRelease: (_event, gestureState) => {
+        const next = dragStartX.current + gestureState.dx;
+        const shouldOpen = next < -(revealWidth / 2);
+
+        Animated.spring(translateX, {
+          toValue: shouldOpen ? -revealWidth : 0,
+          useNativeDriver: true,
+          bounciness: 0
+        }).start(() => {
+          setFeedbackOpen(shouldOpen);
+        });
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(translateX, {
+          toValue: 0,
+          useNativeDriver: true,
+          bounciness: 0
+        }).start(() => {
+          setFeedbackOpen(false);
+        });
+      }
+    })
+  ).current;
+
+  function closeSwipe(): void {
+    Animated.spring(translateX, {
+      toValue: 0,
+      useNativeDriver: true,
+      bounciness: 0
+    }).start(() => {
+      setFeedbackOpen(false);
+    });
+  }
+
+  useEffect(() => {
+    if (!visibleExpanded) {
+      setNextMoveOpen(false);
+      setActionsOpen(false);
+    }
+  }, [visibleExpanded]);
+
+  function toggleDetailPanel(section: "nextMove" | "actions"): void {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    if (section === "nextMove") {
+      setNextMoveOpen((current) => !current);
+      return;
+    }
+
+    setActionsOpen((current) => !current);
+  }
+
+  return (
+    <View style={styles.swipeShell}>
+      <Animated.View style={{ transform: [{ translateX }] }} {...panResponder.panHandlers}>
+        <View style={[styles.card, item.done ? styles.cardDone : null, visibleExpanded ? styles.cardExpanded : null]}>
+          <Pressable
+            onPress={() => {
+              closeSwipe();
+              if (!forceExpanded) onToggleExpand(item);
+            }}
+            style={styles.cardPressArea}
+          >
+            <View style={styles.cardGrid}>
+              <View style={styles.cardMain}>
+                <View style={styles.cardTagRow}>
+                  <View style={styles.categoryChip}>
+                    <Text style={styles.categoryChipText}>{item.category}</Text>
+                  </View>
+                  <ImportanceBadge level={item.importance} />
+                  <SourceBadge source={item.source} />
+                </View>
+
+                <View style={styles.cardTopLine}>
+                  <Text style={[styles.cardTitle, item.done ? styles.cardTitleDone : null]} numberOfLines={1}>
+                    {item.subject}
+                  </Text>
+                </View>
+
+                <Text style={styles.compactMeta} numberOfLines={1}>
+                  {compactMeta}
+                </Text>
+
+                <Text style={styles.compactSummary} numberOfLines={visibleExpanded ? 3 : 2}>
+                  {item.summary}
+                </Text>
+
+                <View style={styles.signalRow}>
+                  <Text style={[styles.signalTag, item.needsAction ? styles.signalAction : styles.signalInfo]}>
+                    {item.needsAction ? "Action" : "Info"}
+                  </Text>
+                  {actionCount > 0 ? (
+                    <Text style={styles.signalText}>{actionCount} suggested {actionCount === 1 ? "step" : "steps"}</Text>
+                  ) : (
+                    <Text style={styles.signalText}>No action items</Text>
+                  )}
+                  {item.keyDates.length > 0 ? (
+                    <Text style={styles.signalText}>{item.keyDates.length} key date{item.keyDates.length === 1 ? "" : "s"}</Text>
+                  ) : null}
+                </View>
+              </View>
+
+              <View style={styles.expandRail}>
+                <Text style={styles.expandGlyph}>{visibleExpanded ? "−" : "+"}</Text>
+              </View>
+            </View>
+          </Pressable>
+
+          {feedbackOpen ? (
+            <View style={styles.feedbackPanel}>
+              <Text style={styles.feedbackTitle}>Not interested in this kind of message because…</Text>
+              <View style={styles.feedbackActionRow}>
+                <Pressable
+                  onPress={() => {
+                    closeSwipe();
+                    onNotInterested(item, "SENDER_ONLY");
+                  }}
+                  disabled={disabled}
+                  style={[styles.feedbackChoice, disabled ? styles.actionButtonDisabled : null]}
+                >
+                  <Text style={styles.feedbackChoiceTitle}>Sender</Text>
+                  <Text style={styles.feedbackChoiceMeta}>Mute this sender</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => {
+                    closeSwipe();
+                    onNotInterested(item, "SENDER_AND_CONTEXT");
+                  }}
+                  disabled={disabled}
+                  style={[styles.feedbackChoice, disabled ? styles.actionButtonDisabled : null]}
+                >
+                  <Text style={styles.feedbackChoiceTitle}>Message</Text>
+                  <Text style={styles.feedbackChoiceMeta}>Mute similar messages</Text>
+                </Pressable>
+              </View>
+              <Pressable onPress={closeSwipe} style={styles.feedbackDismiss}>
+                <Text style={styles.feedbackDismissLabel}>Cancel</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          {visibleExpanded ? (
+            <View style={styles.expandedPanel}>
+              {hasNextMove || hasSuggestedActions ? (
+                <View style={styles.detailSection}>
+                  <View style={styles.collapseRow}>
+                    {hasNextMove ? (
+                      <Pressable
+                        onPress={() => toggleDetailPanel("nextMove")}
+                        style={[
+                          styles.collapseChip,
+                          styles.collapseChipPrimary,
+                          nextMoveOpen ? styles.collapseChipOpen : null
+                        ]}
+                      >
+                        <View style={styles.collapseChipCopy}>
+                          <Text style={styles.collapseLabel}>Next best move</Text>
+                          <Text style={styles.collapseMeta}>One recommended step</Text>
+                        </View>
+                        <Text style={styles.collapseGlyph}>{nextMoveOpen ? "-" : "+"}</Text>
+                      </Pressable>
+                    ) : null}
+
+                    {hasSuggestedActions ? (
+                      <Pressable
+                        onPress={() => toggleDetailPanel("actions")}
+                        style={[
+                          styles.collapseChip,
+                          actionsOpen ? styles.collapseChipOpen : null
+                        ]}
+                      >
+                        <View style={styles.collapseChipCopy}>
+                          <Text style={styles.collapseLabel}>Suggested actions</Text>
+                          <Text style={styles.collapseMeta}>
+                            {actionCount} ready to review
+                          </Text>
+                        </View>
+                        <Text style={styles.collapseBadge}>{actionCount > 99 ? "99+" : String(actionCount)}</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+
+                  {nextMoveOpen && item.actionSummary ? (
+                    <View style={styles.inlineCallout}>
+                      <Text style={styles.inlineCalloutText}>{item.actionSummary}</Text>
+                    </View>
+                  ) : null}
+
+                  {actionsOpen ? (
+                    <View style={styles.detailList}>
+                      {item.suggestedActions.map((action) => (
+                        <View key={action.id} style={styles.detailRow}>
+                          <Text style={styles.detailBullet}>-</Text>
+                          <View style={styles.detailBody}>
+                            <Text style={styles.detailTitle}>{action.title}</Text>
+                            <Text style={styles.detailMeta}>
+                              {action.kind}
+                              {action.dueDate ? ` | due ${action.dueDate}` : ""}
+                            </Text>
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
+
+              {item.keyDates.length > 0 ? (
+                <View style={styles.detailSection}>
+                  <Text style={styles.detailLabel}>Key Dates</Text>
+                  <View style={styles.dateStrip}>
+                    {item.keyDates.map((date) => (
+                      <View key={`${date.label}-${date.date}`} style={styles.dateTag}>
+                        <Text style={styles.dateTagLabel}>{date.label}</Text>
+                        <Text style={styles.dateTagValue}>{date.date}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
+
+              <View style={styles.actionRow}>
+                <Pressable
+                  onPress={() => {
+                    closeSwipe();
+                    onToggleDone(item);
+                  }}
+                  disabled={disabled}
+                  style={[
+                    styles.actionButton,
+                    item.done ? styles.actionButtonDone : styles.actionButtonPrimary,
+                    disabled ? styles.actionButtonDisabled : null
+                  ]}
+                >
+                  <Text style={styles.actionButtonLabel}>{item.done ? "Mark Active" : "Mark Done"}</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => {
+                    closeSwipe();
+                    onRemove(item);
+                  }}
+                  disabled={disabled}
+                  style={[
+                    styles.actionButton,
+                    styles.actionButtonDanger,
+                    disabled ? styles.actionButtonDisabled : null
+                  ]}
+                >
+                  <Text style={styles.actionButtonLabel}>Remove</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
+        </View>
+      </Animated.View>
+    </View>
+  );
+}
+
+function describeSuppressionRule(rule: MobileSuppressionRule): { title: string; detail: string } {
+  if (rule.type === "THREAD") {
+    return {
+      title: "Muted thread",
+      detail: rule.threadId || "Specific thread"
+    };
+  }
+
+  if (rule.type === "SENDER") {
+    return {
+      title: "Muted sender",
+      detail: rule.senderEmail || "Unknown sender"
+    };
+  }
+
+  const topic = rule.context.topic || "Similar message pattern";
+  const keywords = rule.context.keywords?.length ? rule.context.keywords.join(", ") : "No keywords";
+
+  return {
+    title: `Muted semantic pattern from ${rule.senderEmail || "sender"}`,
+    detail: `${topic} | ${keywords}`
+  };
 }
 
 export default function App() {
@@ -386,12 +815,17 @@ export default function App() {
   const [items, setItems] = useState<MobileAssessment[]>([]);
   const [expectations, setExpectations] = useState<MobileExpectation[]>([]);
   const [alerts, setAlerts] = useState<ExpectationAlert[]>([]);
+  const [rules, setRules] = useState<MobileSuppressionRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [rulesLoading, setRulesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingIds, setPendingIds] = useState<string[]>([]);
   const [expandedIds, setExpandedIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [ruleSearchQuery, setRuleSearchQuery] = useState("");
+  const [rulePrompt, setRulePrompt] = useState("");
+  const [selectedRuleId, setSelectedRuleId] = useState<string | null>(null);
   const [expectationQuery, setExpectationQuery] = useState("");
   const [expectationBusy, setExpectationBusy] = useState(false);
   const notifiedAlertIdsRef = useRef<string[]>([]);
@@ -400,6 +834,7 @@ export default function App() {
   const deferredImportance = useDeferredValue(importanceFilter);
   const deferredNeedsAction = useDeferredValue(needsActionOnly);
   const deferredSearchQuery = useDeferredValue(searchQuery);
+  const deferredRuleSearchQuery = useDeferredValue(ruleSearchQuery);
 
   useEffect(() => {
     if (
@@ -497,6 +932,25 @@ export default function App() {
     }
   }
 
+  async function loadRules(query = ruleSearchQuery): Promise<void> {
+    setRulesLoading(true);
+
+    try {
+      const nextRules = await fetchSuppressionRules(query);
+      startTransition(() => {
+        setRules(nextRules);
+        setSelectedRuleId((current) =>
+          current && nextRules.some((rule) => rule.id === current) ? current : null
+        );
+      });
+      setError(null);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : String(loadError));
+    } finally {
+      setRulesLoading(false);
+    }
+  }
+
   function toggleExpanded(item: MobileAssessment): void {
     setExpandedIds((current) =>
       current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id]
@@ -543,6 +997,79 @@ export default function App() {
       setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
     } finally {
       clearPending(item.id);
+    }
+  }
+
+  async function handleNotInterested(
+    item: MobileAssessment,
+    mode: "SENDER_ONLY" | "SENDER_AND_CONTEXT"
+  ): Promise<void> {
+    markPending(item.id);
+
+    try {
+      await sendNotInterestedFeedback(item, mode);
+      startTransition(() => {
+        setItems((current) => current.filter((entry) => entry.id !== item.id));
+        setExpandedIds((current) => current.filter((id) => id !== item.id));
+      });
+      setError(null);
+    } catch (mutationError) {
+      setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
+    } finally {
+      clearPending(item.id);
+    }
+  }
+
+  async function handleToggleRule(rule: MobileSuppressionRule): Promise<void> {
+    markPending(rule.id);
+
+    try {
+      const updated = await updateSuppressionRule(rule.id, { isActive: !rule.isActive });
+      startTransition(() => {
+        setRules((current) =>
+          current.map((entry) => (entry.id === updated.id ? updated : entry))
+        );
+      });
+      setError(null);
+    } catch (mutationError) {
+      setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
+    } finally {
+      clearPending(rule.id);
+    }
+  }
+
+  async function handleDeleteRule(rule: MobileSuppressionRule): Promise<void> {
+    markPending(rule.id);
+
+    try {
+      await deleteSuppressionRule(rule.id);
+      startTransition(() => {
+        setRules((current) => current.filter((entry) => entry.id !== rule.id));
+        setSelectedRuleId((current) => (current === rule.id ? null : current));
+      });
+      setError(null);
+    } catch (mutationError) {
+      setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
+    } finally {
+      clearPending(rule.id);
+    }
+  }
+
+  async function handleApplyRulePrompt(): Promise<void> {
+    const trimmed = rulePrompt.trim();
+    if (!trimmed) return;
+
+    setRulesLoading(true);
+
+    try {
+      const payload = await applySuppressionRulePrompt(trimmed, selectedRuleId || undefined);
+      setRulePrompt("");
+      setSelectedRuleId(payload.operation === "deleted" ? null : payload.item?.id || selectedRuleId);
+      await loadRules(ruleSearchQuery);
+    } catch (mutationError) {
+      setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
+    } finally {
+      setRulesLoading(false);
     }
   }
 
@@ -611,6 +1138,7 @@ export default function App() {
 
   useEffect(() => {
     void loadItems("initial");
+    void loadRules("");
 
     const intervalId = setInterval(() => {
       void loadItems("background");
@@ -620,6 +1148,12 @@ export default function App() {
       clearInterval(intervalId);
     };
   }, [deferredSearchQuery]);
+
+  useEffect(() => {
+    if (currentScreen === "rules") {
+      void loadRules(deferredRuleSearchQuery);
+    }
+  }, [currentScreen, deferredRuleSearchQuery]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -640,17 +1174,25 @@ export default function App() {
           <View style={styles.heroTopRow}>
             <View style={styles.heroLeft}>
               <Text style={styles.eyebrow}>
-                {currentScreen === "inbox" ? "Information Inbox" : "Attention Center"}
+                {currentScreen === "inbox"
+                  ? "Information Inbox"
+                  : currentScreen === "attention"
+                    ? "Attention Center"
+                    : "Rule Control"}
               </Text>
               <Text style={styles.heroTitle}>
                 {currentScreen === "inbox"
                   ? "Scan quickly. Open only what matters."
-                  : "Resolve urgent items with full focus."}
+                  : currentScreen === "attention"
+                    ? "Resolve urgent items with full focus."
+                    : "Shape what Assura should ignore."}
               </Text>
               <Text style={styles.heroSubtle}>
                 {currentScreen === "inbox"
                   ? "This page is optimized for information density and fast scanning."
-                  : "Expected matches and urgent tasks are isolated here so you can act without inbox noise."}
+                  : currentScreen === "attention"
+                    ? "Expected matches and urgent tasks are isolated here so you can act without inbox noise."
+                    : "Search, update, and create suppression rules with plain language."}
               </Text>
             </View>
             <View style={styles.heroRight}>
@@ -680,6 +1222,14 @@ export default function App() {
             >
               <Text style={[styles.viewTabLabel, currentScreen === "attention" ? styles.viewTabLabelActive : null]}>
                 Attention
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setCurrentScreen("rules")}
+              style={[styles.viewTab, currentScreen === "rules" ? styles.viewTabActive : null]}
+            >
+              <Text style={[styles.viewTabLabel, currentScreen === "rules" ? styles.viewTabLabelActive : null]}>
+                Rules
               </Text>
             </Pressable>
           </View>
@@ -749,6 +1299,58 @@ export default function App() {
           </View>
           ) : null}
 
+          {currentScreen === "rules" ? (
+          <View style={styles.rulesShell}>
+            <TextInput
+              value={ruleSearchQuery}
+              onChangeText={setRuleSearchQuery}
+              placeholder="Search suppression rules"
+              placeholderTextColor="#7f8a88"
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={styles.searchInput}
+            />
+            <TextInput
+              value={rulePrompt}
+              onChangeText={setRulePrompt}
+              placeholder={
+                selectedRuleId
+                  ? "Update selected rule in plain English"
+                  : "Create a rule in plain English"
+              }
+              placeholderTextColor="#7f8a88"
+              autoCapitalize="sentences"
+              autoCorrect={true}
+              multiline
+              style={styles.rulePromptInput}
+            />
+            <View style={styles.ruleComposerRow}>
+              <Pressable
+                onPress={() => void handleApplyRulePrompt()}
+                disabled={rulesLoading}
+                style={[styles.watchButton, rulesLoading ? styles.actionButtonDisabled : null]}
+              >
+                <Text style={styles.watchButtonLabel}>
+                  {selectedRuleId ? "Update Rule" : "Create Rule"}
+                </Text>
+              </Pressable>
+              {selectedRuleId ? (
+                <Pressable
+                  onPress={() => setSelectedRuleId(null)}
+                  style={styles.ruleClearButton}
+                >
+                  <Text style={styles.ruleClearButtonLabel}>Clear selection</Text>
+                </Pressable>
+              ) : null}
+            </View>
+            <Text style={styles.ruleHint}>
+              {selectedRuleId
+                ? "The selected rule will be updated from your instruction."
+                : "Try: Mute newsletters from billing@example.com or disable the selected rule."}
+            </Text>
+          </View>
+          ) : null}
+
           {currentScreen === "inbox" ? (
           <>
           <TextInput
@@ -807,7 +1409,7 @@ export default function App() {
               ) : (
                 <View style={styles.listStack}>
                   {urgentItems.map((item) => (
-                    <MessageCard
+                    <FeedbackMessageCard
                       key={item.id}
                       item={item}
                       expanded={true}
@@ -816,12 +1418,92 @@ export default function App() {
                       onToggleExpand={toggleExpanded}
                       onToggleDone={(entry) => void handleToggleDone(entry)}
                       onRemove={(entry) => void handleRemove(entry)}
+                      onNotInterested={(entry, mode) => void handleNotInterested(entry, mode)}
                     />
                   ))}
                 </View>
               )}
             </View>
           </>
+        ) : null}
+
+        {currentScreen === "rules" ? (
+        <>
+        <View style={styles.resultsBar}>
+          <Text style={styles.resultsTitle}>Suppression Rules</Text>
+          <Text style={styles.resultsMeta}>
+            {rules.length} loaded{selectedRuleId ? " • 1 selected" : ""}
+          </Text>
+        </View>
+
+        {rulesLoading ? (
+          <View style={styles.loadingShell}>
+            <ActivityIndicator size="small" color="#1d5f57" />
+            <Text style={styles.loadingLabel}>Refreshing rules...</Text>
+          </View>
+        ) : null}
+
+        <View style={styles.listStack}>
+          {!rulesLoading && rules.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateTitle}>No suppression rules yet</Text>
+              <Text style={styles.emptyStateText}>
+                Swipe a message left or create one here with natural language.
+              </Text>
+            </View>
+          ) : (
+            rules.map((rule) => {
+              const description = describeSuppressionRule(rule);
+              const selected = selectedRuleId === rule.id;
+
+              return (
+                <Pressable
+                  key={rule.id}
+                  onPress={() => setSelectedRuleId((current) => (current === rule.id ? null : rule.id))}
+                  style={[
+                    styles.ruleCard,
+                    selected ? styles.ruleCardSelected : null
+                  ]}
+                >
+                  <View style={styles.ruleCardTop}>
+                    <View style={styles.ruleCardMain}>
+                      <Text style={styles.ruleCardTitle}>{description.title}</Text>
+                      <Text style={styles.ruleCardText}>{description.detail}</Text>
+                    </View>
+                    <Text style={[styles.ruleStateBadge, rule.isActive ? styles.ruleStateActive : styles.ruleStatePaused]}>
+                      {rule.isActive ? "Active" : "Paused"}
+                    </Text>
+                  </View>
+                  <Text style={styles.ruleMetaText}>
+                    {rule.threshold ? `threshold ${rule.threshold.toFixed(2)}` : "default threshold"}
+                    {rule.searchScore ? ` • score ${rule.searchScore.toFixed(2)}` : ""}
+                  </Text>
+                  <View style={styles.ruleActionRow}>
+                    <Pressable
+                      onPress={() => void handleToggleRule(rule)}
+                      disabled={pendingIds.includes(rule.id)}
+                      style={[styles.ruleActionButton, pendingIds.includes(rule.id) ? styles.actionButtonDisabled : null]}
+                    >
+                      <Text style={styles.ruleActionButtonLabel}>{rule.isActive ? "Pause" : "Enable"}</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => void handleDeleteRule(rule)}
+                      disabled={pendingIds.includes(rule.id)}
+                      style={[
+                        styles.ruleActionButton,
+                        styles.ruleDeleteButton,
+                        pendingIds.includes(rule.id) ? styles.actionButtonDisabled : null
+                      ]}
+                    >
+                      <Text style={styles.ruleActionButtonLabel}>Delete</Text>
+                    </Pressable>
+                  </View>
+                </Pressable>
+              );
+            })
+          )}
+        </View>
+        </>
         ) : null}
 
         {currentScreen === "inbox" ? (
@@ -857,7 +1539,7 @@ export default function App() {
             </View>
           ) : (
             filteredItems.map((item) => (
-              <MessageCard
+              <FeedbackMessageCard
                 key={item.id}
                 item={item}
                 expanded={expandedIds.includes(item.id)}
@@ -865,6 +1547,7 @@ export default function App() {
                 onToggleExpand={toggleExpanded}
                 onToggleDone={(entry) => void handleToggleDone(entry)}
                 onRemove={(entry) => void handleRemove(entry)}
+                onNotInterested={(entry, mode) => void handleNotInterested(entry, mode)}
               />
             ))
           )}
@@ -996,15 +1679,15 @@ const styles = StyleSheet.create({
   },
   viewSwitcher: {
     backgroundColor: "#183733",
-    borderRadius: 16,
-    padding: 4,
+    borderRadius: 14,
+    padding: 3,
     flexDirection: "row",
-    gap: 6
+    gap: 4
   },
   viewTab: {
     flex: 1,
-    borderRadius: 12,
-    paddingVertical: 10,
+    borderRadius: 10,
+    paddingVertical: 8,
     alignItems: "center"
   },
   viewTabActive: {
@@ -1012,10 +1695,10 @@ const styles = StyleSheet.create({
   },
   viewTabLabel: {
     color: "#9fc1ba",
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "800",
     textTransform: "uppercase",
-    letterSpacing: 0.6
+    letterSpacing: 0.5
   },
   viewTabLabelActive: {
     color: "#183531"
@@ -1098,6 +1781,13 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     padding: 10,
     marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "#d2ddd6"
+  },
+  rulesShell: {
+    backgroundColor: "#e9efe6",
+    borderRadius: 18,
+    padding: 10,
     borderWidth: 1,
     borderColor: "#d2ddd6"
   },
@@ -1216,6 +1906,40 @@ const styles = StyleSheet.create({
     color: "#1b302c",
     fontSize: 14,
     marginBottom: 10
+  },
+  rulePromptInput: {
+    minHeight: 74,
+    backgroundColor: "#fbfcf8",
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    color: "#1b302c",
+    fontSize: 13,
+    textAlignVertical: "top",
+    marginBottom: 10
+  },
+  ruleComposerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8
+  },
+  ruleClearButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: "#d9e3dc"
+  },
+  ruleClearButtonLabel: {
+    color: "#35514a",
+    fontSize: 12,
+    fontWeight: "800"
+  },
+  ruleHint: {
+    marginTop: 8,
+    color: "#5b6a66",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "600"
   },
   chipRow: {
     flexDirection: "row",
@@ -1348,6 +2072,170 @@ const styles = StyleSheet.create({
   listStack: {
     gap: 8
   },
+  ruleCard: {
+    backgroundColor: "#fbfcf8",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#d7ddd1",
+    padding: 12
+  },
+  ruleCardSelected: {
+    borderColor: "#8a4e3d",
+    backgroundColor: "#fff7f1"
+  },
+  ruleCardTop: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    marginBottom: 6
+  },
+  ruleCardMain: {
+    flex: 1
+  },
+  ruleCardTitle: {
+    color: "#203431",
+    fontSize: 14,
+    fontWeight: "800",
+    marginBottom: 2
+  },
+  ruleCardText: {
+    color: "#536662",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "700"
+  },
+  ruleStateBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    fontSize: 10,
+    fontWeight: "900",
+    overflow: "hidden",
+    textTransform: "uppercase"
+  },
+  ruleStateActive: {
+    backgroundColor: "#d9ebe3",
+    color: "#1d5f57"
+  },
+  ruleStatePaused: {
+    backgroundColor: "#ead9d3",
+    color: "#8a4e3d"
+  },
+  ruleMetaText: {
+    color: "#6a7774",
+    fontSize: 11,
+    fontWeight: "700",
+    marginBottom: 10
+  },
+  ruleActionRow: {
+    flexDirection: "row",
+    gap: 8
+  },
+  ruleActionButton: {
+    flex: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: "#1d5f57",
+    alignItems: "center"
+  },
+  ruleDeleteButton: {
+    backgroundColor: "#8a4e3d"
+  },
+  ruleActionButtonLabel: {
+    color: "#f8faf5",
+    fontSize: 12,
+    fontWeight: "900"
+  },
+  swipeShell: {
+    position: "relative"
+  },
+  swipeRail: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    width: 104,
+    alignItems: "stretch",
+    justifyContent: "center"
+  },
+  swipeActionButton: {
+    flex: 1,
+    borderRadius: 20,
+    backgroundColor: "#8a4e3d",
+    borderWidth: 1,
+    borderColor: "#a96a57",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 10
+  },
+  swipeActionEyebrow: {
+    color: "#f9d7ca",
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    marginBottom: 4
+  },
+  swipeActionLabel: {
+    color: "#fff7f1",
+    fontSize: 12,
+    lineHeight: 15,
+    fontWeight: "900",
+    textAlign: "center"
+  },
+  feedbackPanel: {
+    borderTopWidth: 1,
+    borderTopColor: "#e4e8de",
+    backgroundColor: "#fff5f1",
+    paddingHorizontal: 12,
+    paddingVertical: 12
+  },
+  feedbackTitle: {
+    color: "#5c2f22",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "800",
+    marginBottom: 10
+  },
+  feedbackActionRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 8
+  },
+  feedbackChoice: {
+    flex: 1,
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    backgroundColor: "#8a4e3d",
+    borderWidth: 1,
+    borderColor: "#a96a57"
+  },
+  feedbackChoiceTitle: {
+    color: "#fff7f1",
+    fontSize: 12,
+    fontWeight: "900",
+    marginBottom: 2
+  },
+  feedbackChoiceMeta: {
+    color: "#f7d8ce",
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: "700"
+  },
+  feedbackDismiss: {
+    alignSelf: "flex-end",
+    paddingHorizontal: 6,
+    paddingVertical: 4
+  },
+  feedbackDismissLabel: {
+    color: "#7f4b3e",
+    fontSize: 11,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.5
+  },
   card: {
     backgroundColor: "#fbfcf8",
     borderRadius: 20,
@@ -1364,12 +2252,19 @@ const styles = StyleSheet.create({
   },
   cardPressArea: {
     paddingHorizontal: 12,
-    paddingVertical: 10
+    paddingVertical: 9
   },
   cardGrid: {
     flexDirection: "row",
     alignItems: "flex-start",
-    gap: 10
+    gap: 8
+  },
+  cardTagRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexWrap: "wrap",
+    marginBottom: 6
   },
   leftRail: {
     width: 56,
@@ -1392,6 +2287,22 @@ const styles = StyleSheet.create({
   },
   priorityDotCritical: {
     backgroundColor: "#b93f27"
+  },
+  categoryChip: {
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    backgroundColor: "#f1ece1",
+    borderWidth: 1,
+    borderColor: "#e5dbc8"
+  },
+  categoryChipText: {
+    color: "#75503c",
+    fontSize: 10,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.45
   },
   categoryPill: {
     color: "#8b4d35",
@@ -1474,31 +2385,93 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#e4e8de",
     paddingHorizontal: 12,
-    paddingVertical: 12,
+    paddingVertical: 10,
     backgroundColor: "#f7faf4"
+  },
+  collapseRow: {
+    flexDirection: "row",
+    gap: 8
+  },
+  collapseChip: {
+    flex: 1,
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: "#edf3ea",
+    borderWidth: 1,
+    borderColor: "#d7e1d7",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between"
+  },
+  collapseChipPrimary: {
+    flex: 1.05
+  },
+  collapseChipOpen: {
+    backgroundColor: "#e8efe5",
+    borderColor: "#cad8cd"
+  },
+  collapseChipCopy: {
+    flex: 1,
+    paddingRight: 8
+  },
+  collapseLabel: {
+    color: "#28413b",
+    fontSize: 10,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.55,
+    marginBottom: 1
+  },
+  collapseMeta: {
+    color: "#60706d",
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: "700"
+  },
+  collapseGlyph: {
+    color: "#23433d",
+    fontSize: 17,
+    lineHeight: 17,
+    fontWeight: "700"
+  },
+  collapseBadge: {
+    minWidth: 26,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: "#dce8dc",
+    color: "#23433d",
+    fontSize: 10,
+    lineHeight: 10,
+    fontWeight: "900",
+    textAlign: "center"
   },
   inlineCallout: {
     backgroundColor: "#e8efe5",
     borderRadius: 14,
     padding: 10,
-    marginBottom: 10
+    marginTop: 8
   },
   inlineCalloutLabel: {
-    color: "#4d5c58",
+    color: "#51625e",
     fontSize: 10,
     fontWeight: "900",
     textTransform: "uppercase",
-    letterSpacing: 0.8,
+    letterSpacing: 0.7,
     marginBottom: 4
   },
   inlineCalloutText: {
     color: "#203633",
-    fontSize: 13,
-    lineHeight: 18,
+    fontSize: 12,
+    lineHeight: 17,
     fontWeight: "600"
   },
   detailSection: {
-    marginBottom: 10
+    marginBottom: 8
+  },
+  detailList: {
+    marginTop: 8
   },
   detailLabel: {
     color: "#51625e",
@@ -1586,8 +2559,10 @@ const styles = StyleSheet.create({
   },
   badge: {
     paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderRadius: 12
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(32, 44, 42, 0.08)"
   },
   badgeLow: {
     backgroundColor: "#d8ead2"
@@ -1605,7 +2580,27 @@ const styles = StyleSheet.create({
     color: "#202c2a",
     fontSize: 9,
     fontWeight: "900",
-    letterSpacing: 0.7
+    letterSpacing: 0.55
+  },
+  sourceBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: "#f8f8f4",
+    borderWidth: 1,
+    borderColor: "#dde3d8"
+  },
+  sourceBadgeIcon: {
+    marginRight: 5
+  },
+  sourceBadgeText: {
+    color: "#42514d",
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.45
   },
   emptyState: {
     backgroundColor: "#f7f5ee",

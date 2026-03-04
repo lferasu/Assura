@@ -11,7 +11,7 @@ import {
 } from "../adapters/expectationStore.js";
 import { API_PORT, CHROMA_ENABLED } from "../config/env.js";
 import type { StoredMessageAssessment } from "../core/contracts.js";
-import type { ImportanceLevel, SuggestedAction } from "../core/types.js";
+import type { ImportanceLevel, MessageSource, SuggestedAction } from "../core/types.js";
 
 interface InboxMessageStatus {
   done?: boolean;
@@ -27,6 +27,7 @@ interface ApiSuggestedAction extends SuggestedAction {
 
 interface InboxApiItem {
   id: string;
+  source: MessageSource;
   subject: string;
   from: string;
   category: string;
@@ -104,6 +105,36 @@ async function writeInboxStatusMap(statusMap: InboxStatusMap): Promise<void> {
   await fs.writeFile(inboxStatusPath, `${JSON.stringify(statusMap, null, 2)}\n`, "utf8");
 }
 
+function normalizeSummary(summary: string): string {
+  const trimmed = summary.trim();
+  if (!trimmed) return "";
+
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const summaryLine = lines.find((line) => line.toLowerCase().startsWith("summary:"));
+  if (summaryLine) {
+    return summaryLine.slice("summary:".length).trim();
+  }
+
+  const contentLine = lines.find((line) => {
+    const lower = line.toLowerCase();
+    return (
+      !lower.startsWith("category:") &&
+      !lower.startsWith("importance:") &&
+      !lower.startsWith("needs action:") &&
+      !lower.startsWith("suggested next step:") &&
+      !lower.startsWith("key dates:") &&
+      lower !== "action items:" &&
+      !line.startsWith("- ")
+    );
+  });
+
+  return contentLine || trimmed;
+}
+
 function toInboxApiItem(
   record: StoredMessageAssessment,
   statusMap: InboxStatusMap
@@ -112,12 +143,13 @@ function toInboxApiItem(
 
   return {
     id: record.message.messageId,
+    source: record.message.source,
     subject: record.message.subject,
     from: record.message.from,
     category: record.assessment.category,
     importance: record.assessment.importance,
     needsAction: record.assessment.needsAction,
-    summary: record.summary,
+    summary: normalizeSummary(record.assessment.summary || record.summary),
     actionSummary: record.assessment.actionSummary,
     keyDates: record.assessment.keyDates,
     suggestedActions: record.assessment.actionItems.map((action, index) => ({
@@ -135,6 +167,7 @@ function applyStatus(item: InboxRecord, statusMap: InboxStatusMap): InboxApiItem
 
   return {
     ...item,
+    summary: normalizeSummary(item.summary),
     done: Boolean(status.done),
     removed: Boolean(status.removed)
   };
