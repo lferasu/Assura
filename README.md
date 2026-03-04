@@ -2,7 +2,7 @@
 
 Assura is a Gmail-based personal assistant that polls incoming email, classifies each message, estimates importance, identifies whether follow-up is needed, and produces structured action suggestions for things like calendar changes, to-do updates, or manual review.
 
-It now also supports a user-driven "Not interested in this kind of message" loop. The mobile client can send suppression feedback to a lightweight API, and future poll cycles can mute similar messages before they are summarized or surfaced as actionable items.
+It also supports a user-driven "Not interested in this kind of message" loop. The mobile client can send suppression feedback to a lightweight API, and future poll cycles can mute similar messages before they are extracted, summarized, or surfaced as actionable items.
 
 The current implementation is intentionally conservative: it extracts and stores recommendations, but it does not execute external tool actions yet. Suggested actions are routed into a manual-review execution plan so real integrations can be added safely later.
 
@@ -13,12 +13,12 @@ On each poll cycle, Assura:
 1. Reads local processing state from `assistant/data/state.json`.
 2. Pulls recent messages from Gmail using the Gmail API.
 3. Skips only empty messages.
-4. Uses an LLM to produce a structured message assessment.
-5. Generates a readable summary of category, importance, and suggested next steps.
-6. Stores the processed assessment and planned actions as JSONL records.
-7. Prints the assessment and execution plan to the terminal.
-8. Marks the Gmail message as processed and advances the cursor.
-9. Applies active suppression rules before summarization and stores muted messages in a separate suppressed log.
+4. Applies active suppression rules before extraction.
+5. Stores muted messages separately when a suppression rule matches.
+6. Uses an LLM to produce a structured message assessment for non-suppressed messages.
+7. Stores the processed assessment and planned actions.
+8. Prints the assessment and execution plan to the terminal.
+9. Marks the Gmail message as processed and advances the cursor.
 
 ## Current Architecture
 
@@ -27,12 +27,13 @@ The code is organized so future storage and tool integrations can be added witho
 - `assistant/src/runners/localPoll.ts`: long-running local poll loop.
 - `assistant/src/adapters/gmailSource.ts`: Gmail OAuth, fetch, and normalization.
 - `assistant/src/core/extract.ts`: LLM-based message classification and structured extraction.
-- `assistant/src/core/summarize.ts`: readable summaries for processed messages.
+- `assistant/src/core/summarize.ts`: persistence summary formatting (currently the plain extracted summary text).
 - `assistant/src/core/pipeline.ts`: orchestration of extraction, storage, and action preparation.
 - `assistant/src/core/contracts.ts`: extension interfaces for message storage, suppression, feedback, and tool execution.
 - `assistant/src/core/suppression.ts`: suppression rule models, keyword extraction, and cosine similarity helpers.
 - `assistant/src/core/defaultSuppressionEvaluator.ts`: suppression matching logic (sender, thread, sender + semantic context).
 - `assistant/src/core/feedbackService.ts`: converts mobile "not interested" feedback into stored suppression rules.
+- `assistant/src/core/ruleCommandService.ts`: interprets natural-language suppression rule commands.
 - `assistant/src/adapters/fileMessageStore.ts`: append-only JSONL storage for assessments.
 - `assistant/src/adapters/fileActionStore.ts`: append-only JSONL storage for planned actions.
 - `assistant/src/adapters/fileSuppressionRuleStore.ts`: append-only JSONL suppression rule storage for local mode.
@@ -54,13 +55,16 @@ The repository also includes a React Native client in `mobile/`.
 
 It currently provides:
 
-- an inbox-style view of message summaries
-- suggested action cards
+- a live inbox view backed by the assistant inbox API
+- an urgent-action queue view
+- swipe-left "Not interested" feedback on messages
+- sender-only and semantic-message suppression feedback modes
+- suppression rule search, enable/disable, delete, and natural-language create/update
+- message expansion with independently collapsible "Next best move" and "Suggested actions" sections
 - category filtering
 - importance filtering
-- an action-required toggle
-
-The mobile app currently uses local mock data shaped like the assistant output. It is intended to be wired to a real API or persisted store next.
+- a rule-management screen for suppression rules
+- message done/remove actions
 
 Run it with:
 
@@ -69,6 +73,16 @@ cd mobile
 npm install
 npm run start
 ```
+
+The mobile app expects:
+
+- inbox API on `API_PORT` (default `8787`)
+- suppression API on `API_PORT + 1` (default `8788`)
+
+Default local URLs are:
+
+- iOS / web: `http://127.0.0.1:8787` and `http://127.0.0.1:8788`
+- Android emulator: `http://10.0.2.2:8787` and `http://10.0.2.2:8788`
 
 ## Extracted Output Model
 
@@ -109,6 +123,11 @@ Variables:
 - `EMBEDDING_MODEL`: defaults to `text-embedding-3-small`
 - `POLL_INTERVAL_SECONDS`: defaults to `120`
 - `GMAIL_MAX_MESSAGES`: defaults to `15`
+- `API_PORT`: defaults to `8787`
+- `CHROMA_ENABLED`: defaults to `false`
+- `CHROMA_URL`: defaults to `http://127.0.0.1:8000`
+- `CHROMA_COLLECTION`: defaults to `assura_messages`
+- `CHROMA_EMBEDDING_MODEL`: defaults to `text-embedding-3-small`
 - `MONGODB_URI`: optional. If set, suppression feedback, rules, and muted message records use MongoDB.
 
 ## Local Setup
@@ -138,7 +157,13 @@ npm install
 npm run poll
 ```
 
-5. Start the suppression API (used by the mobile "Not interested" action):
+5. Start the inbox API (used by the mobile inbox, search, and expectations screens):
+
+```bash
+npm run api
+```
+
+6. Start the suppression API (used by the mobile "Not interested" action and rules screen):
 
 ```bash
 npm run server
@@ -146,13 +171,15 @@ npm run server
 
 By default it listens on `API_PORT + 1` (for example, `8788` when `API_PORT=8787`) so it can run beside the existing inbox API.
 
-6. Optional: start the existing inbox API used by the current mobile app:
+7. Start the mobile app:
 
 ```bash
-npm run api
+cd ../mobile
+npm install
+npm run start
 ```
 
-Run both the poller and suppression API together in separate terminals, or use `start-assura.ps1` from the repo root to launch the poller, inbox API, suppression API, and mobile app windows.
+Run the poller, inbox API, suppression API, and mobile app in separate terminals, or use `start-assura.ps1` from the repo root to launch all four in their own PowerShell windows.
 
 ## Not Interested Feedback
 
@@ -194,6 +221,23 @@ List active rules:
 curl "http://localhost:8788/api/rules?userId=local-user"
 ```
 
+Search rules (keyword + semantic ranking when embeddings are available):
+
+```bash
+curl "http://localhost:8788/api/rules?userId=local-user&includeInactive=true&q=newsletter"
+```
+
+Create or update a rule with natural language:
+
+```bash
+curl -X POST http://localhost:8788/api/rules \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "local-user",
+    "prompt": "mute similar messages from news@example.com about weekly product updates"
+  }'
+```
+
 Disable a rule:
 
 ```bash
@@ -219,6 +263,13 @@ npm run typecheck
 npm run test
 ```
 
+For the mobile app:
+
+```bash
+cd mobile
+npx tsc --noEmit
+```
+
 ## VS Code Debugging
 
 A launch configuration is included at `.vscode/launch.json`.
@@ -237,6 +288,14 @@ The poller uses these local files:
 - `assistant/data/suppressed-messages.jsonl`: muted messages stored during polling when MongoDB is not configured
 
 These are runtime artifacts and should not be committed.
+
+When `MONGODB_URI` is configured, suppression-related data moves to MongoDB instead:
+
+- feedback events
+- suppression rules
+- suppressed / muted message records
+
+The main inbox assessment and action stores remain file-backed today.
 
 ## Git Hygiene
 
