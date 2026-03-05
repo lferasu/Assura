@@ -5,10 +5,12 @@ import {
   createNormalizedMessage,
   type NormalizedMessage
 } from "../core/message.js";
+import { logger } from "../observability/logger.js";
 import type { MessageSourceAdapter } from "../sources/types.js";
 import type { FetchResult, SourceCursor } from "../sources/types.js";
 
 const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
+const gmailLogger = logger.child({ component: "gmail_source" });
 
 type GmailHeader = { name?: string | null; value?: string | null };
 type GmailPayload = {
@@ -93,7 +95,10 @@ async function loadOAuthClient(projectRoot: string) {
       (error as { code?: string }).code === "ENOENT"
     ) {
       const authUrl = client.generateAuthUrl({ access_type: "offline", scope: SCOPES });
-      console.log("Authorize this app by visiting this URL:", authUrl);
+      gmailLogger.warn("gmail.auth.token_missing", "token.json missing for Gmail source", {
+        authUrl,
+        tokenPath
+      });
       throw new Error("token.json missing. Complete OAuth flow and save token.json in project root.");
     }
 
@@ -106,7 +111,10 @@ async function loadOAuthClient(projectRoot: string) {
     }
 
     const authUrl = client.generateAuthUrl({ access_type: "offline", scope: SCOPES });
-    console.log("Authorize this app by visiting this URL:", authUrl);
+    gmailLogger.warn("gmail.auth.token_unreadable", "Unable to load token.json for Gmail source", {
+      authUrl,
+      tokenPath
+    });
     throw new Error("Unable to load token.json.");
   }
 

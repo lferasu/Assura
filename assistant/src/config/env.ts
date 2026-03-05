@@ -49,6 +49,9 @@ function readBooleanEnv(name: string, fallback: boolean): boolean {
 export const OPENAI_API_KEY = readEnv("OPENAI_API_KEY") ?? "";
 export const OPENAI_MODEL = readEnv("OPENAI_MODEL") ?? "gpt-4.1-mini";
 export const EMBEDDING_MODEL = readEnv("EMBEDDING_MODEL") ?? "text-embedding-3-small";
+export const LOG_LEVEL = (readEnv("LOG_LEVEL") ?? "info").toLowerCase();
+export const LOG_FORMAT = (readEnv("LOG_FORMAT") ?? "json").toLowerCase();
+export const LOG_SERVICE_NAME = readEnv("LOG_SERVICE_NAME") ?? "assura";
 export const POLL_INTERVAL_SECONDS = readNumberEnv("POLL_INTERVAL_SECONDS", 120);
 export const TELEGRAM_UI_POLL_INTERVAL_SECONDS = readNumberEnv("TELEGRAM_UI_POLL_INTERVAL_SECONDS", 3);
 export const GMAIL_MAX_MESSAGES = readNumberEnv("GMAIL_MAX_MESSAGES", 15);

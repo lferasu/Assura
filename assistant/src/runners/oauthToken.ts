@@ -2,12 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { google } from "googleapis";
+import { logger } from "../observability/logger.js";
 
 type OAuthConfig = {
   client_id: string;
   client_secret: string;
   redirect_uris: string[];
 };
+const oauthLogger = logger.child({ component: "oauth_token" });
 
 function extractCode(input: string): string {
   const trimmed = input.trim();
@@ -63,11 +65,11 @@ async function main(): Promise<void> {
 
   await fs.writeFile(tokenPath, `${JSON.stringify(tokens, null, 2)}\n`, "utf8");
 
-  console.log(`Saved OAuth token to ${tokenPath}`);
+  oauthLogger.info("oauth.token_saved", "Saved OAuth token", { tokenPath });
 }
 
 void main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
-  console.error("OAuth setup failed:", message);
+  oauthLogger.error("oauth.setup_failed", "OAuth setup failed", { error: message });
   process.exitCode = 1;
 });

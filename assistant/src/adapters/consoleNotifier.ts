@@ -1,5 +1,6 @@
 import { formatMessageSender, type NormalizedMessage } from "../core/message.js";
 import type { MessageAssessment, PreparedAction, SuggestedAction } from "../core/types.js";
+import { logger } from "../observability/logger.js";
 
 function clip(text: string, n = 200): string {
   if (!text) return "";
@@ -19,27 +20,29 @@ export function notifyProcessed({
   actionItems: SuggestedAction[];
   preparedActions: PreparedAction[];
 }): void {
-  console.log("\n=== Message Assessment ===");
-  console.log(`Source: ${message.source}`);
-  console.log(`From: ${formatMessageSender(message)}`);
-  console.log(`Subject: ${message.subject || "(none)"}`);
-  console.log(`Received: ${message.receivedAt}`);
-  console.log(`Preview: ${clip(message.bodyText, 200)}`);
-  console.log("\n1) Summary");
-  console.log(summary);
-  console.log("\n2) Extracted JSON");
-  console.log(JSON.stringify(extracted, null, 2));
-  console.log("\n3) Suggested Actions JSON");
-  console.log(JSON.stringify(actionItems, null, 2));
-  console.log("\n4) Prepared Execution Plan JSON");
-  console.log(JSON.stringify(preparedActions, null, 2));
+  logger.info("message.processed", "Processed message", {
+    source: message.source,
+    externalId: message.externalId,
+    conversationId: message.conversationId,
+    from: formatMessageSender(message),
+    subject: message.subject || "(none)",
+    receivedAt: message.receivedAt,
+    preview: clip(message.bodyText, 200),
+    summary,
+    extracted,
+    actionItems,
+    preparedActions
+  });
 }
 
 export function notifySkipped({ message, reason }: { message: NormalizedMessage; reason: string }): void {
-  console.log("\n--- Skipped message ---");
-  console.log(`Source: ${message.source}`);
-  console.log(`From: ${formatMessageSender(message)}`);
-  console.log(`Subject: ${message.subject || "(none)"}`);
-  console.log(`Received: ${message.receivedAt}`);
-  console.log(`Reason: ${reason}`);
+  logger.info("message.skipped", "Skipped message", {
+    source: message.source,
+    externalId: message.externalId,
+    conversationId: message.conversationId,
+    from: formatMessageSender(message),
+    subject: message.subject || "(none)",
+    receivedAt: message.receivedAt,
+    reason
+  });
 }

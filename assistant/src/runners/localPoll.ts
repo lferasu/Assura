@@ -40,6 +40,7 @@ import { OpenAIEmbeddingService, type EmbeddingProvider } from "../core/embeddin
 import type { PipelineDependencies } from "../core/contracts.js";
 import { runPipelineOnMessage } from "../core/pipeline.js";
 import { saveProcessedMessage } from "../storage/messageStore.js";
+import { logger } from "../observability/logger.js";
 import {
   getLastTelegramUpdateId,
   TelegramClient,
@@ -65,6 +66,7 @@ const feedbackEventsPath = path.join(projectRoot, "data/feedback-events.jsonl");
 const suppressionRulesPath = path.join(projectRoot, "data/suppression-rules.jsonl");
 const suppressedMessagesPath = path.join(projectRoot, "data/suppressed-messages.jsonl");
 const DEFAULT_USER_ID = "local-user";
+const pollLogger = logger.child({ component: "poller" });
 
 interface PollStats {
   fetched: number;
@@ -178,7 +180,11 @@ async function processMessages(
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
       failed += 1;
-      console.error(`Message processing failed for ${getStableMessageKey(message)}: ${messageText}`);
+      pollLogger.error("message.processing_failed", "Message processing failed", {
+        sourceKey,
+        stableMessageKey: getStableMessageKey(message),
+        error: messageText
+      });
     }
   }
 
@@ -411,12 +417,14 @@ export async function pollOnceWithSource(options?: {
 }
 
 async function runForever(): Promise<void> {
-  console.log("Starting source-agnostic local poller...");
-  console.log(`Polling every ${POLL_INTERVAL_SECONDS} seconds`);
-  console.log(`Chroma storage ${CHROMA_ENABLED ? "enabled" : "disabled"}`);
-  console.log(`Suppression storage ${MONGODB_URI ? "mongo" : "file"}`);
+  pollLogger.info("poller.starting", "Starting source-agnostic local poller", {
+    pollIntervalSeconds: POLL_INTERVAL_SECONDS,
+    telegramUiPollIntervalSeconds: TELEGRAM_UI_POLL_INTERVAL_SECONDS,
+    chromaEnabled: CHROMA_ENABLED,
+    suppressionStorage: MONGODB_URI ? "mongo" : "file"
+  });
   if (!TELEGRAM_BOT_TOKEN) {
-    console.log("Telegram disabled (no token)");
+    pollLogger.warn("poller.telegram_disabled", "Telegram disabled because TELEGRAM_BOT_TOKEN is missing");
   }
   const fastPollDependencies = TELEGRAM_BOT_TOKEN ? buildPipelineDependencies() : undefined;
 
@@ -425,12 +433,10 @@ async function runForever(): Promise<void> {
 
     try {
       const stats = await pollOnceWithSource();
-      console.log(
-        `Poll completed. fetched=${stats.fetched} processed=${stats.processed} suppressed=${stats.suppressed} skipped=${stats.skipped} failed=${stats.failed} alreadyProcessed=${stats.alreadyProcessed}`
-      );
+      pollLogger.info("poller.cycle_completed", "Poll cycle completed", { ...stats });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error("Poll error:", message);
+      pollLogger.error("poller.cycle_failed", "Poll cycle failed", { error: message });
     }
 
     const cycleEndsAt = cycleStartedAt + POLL_INTERVAL_SECONDS * 1000;
@@ -438,16 +444,19 @@ async function runForever(): Promise<void> {
 
     if (!TELEGRAM_BOT_TOKEN) {
       const sleepMs = Math.max(0, cycleEndsAt - Date.now());
-      console.log(`Waiting ${Math.ceil(sleepMs / 1000)} seconds before next poll...`);
+      pollLogger.debug("poller.sleep", "Waiting before next poll cycle", {
+        sleepSeconds: Math.ceil(sleepMs / 1000)
+      });
       await new Promise((resolve) => {
         setTimeout(resolve, sleepMs);
       });
       continue;
     }
 
-    console.log(
-      `Waiting ${Math.ceil(Math.max(0, cycleEndsAt - Date.now()) / 1000)} seconds before next full poll (Telegram commands checked every ${Math.max(1, TELEGRAM_UI_POLL_INTERVAL_SECONDS)} seconds)...`
-    );
+    pollLogger.debug("poller.waiting_with_fast_telegram", "Waiting before next full poll", {
+      secondsToNextFullPoll: Math.ceil(Math.max(0, cycleEndsAt - Date.now()) / 1000),
+      telegramUiPollEverySeconds: Math.max(1, TELEGRAM_UI_POLL_INTERVAL_SECONDS)
+    });
 
     while (Date.now() < cycleEndsAt) {
       const remainingMs = cycleEndsAt - Date.now();
@@ -464,7 +473,9 @@ async function runForever(): Promise<void> {
         await pollTelegramOnlyWithSource({ dependencies: fastPollDependencies });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.error("Telegram fast-poll error:", message);
+        pollLogger.error("poller.telegram_fast_poll_failed", "Telegram fast poll failed", {
+          error: message
+        });
       }
     }
   }

@@ -71,6 +71,9 @@ Useful optional values:
 - `POLL_INTERVAL_SECONDS` (default `120`)
 - `TELEGRAM_UI_POLL_INTERVAL_SECONDS` (default `3`)
 - `GMAIL_MAX_MESSAGES` (default `15`)
+- `LOG_LEVEL` (`debug|info|warn|error`, default `info`)
+- `LOG_FORMAT` (`json|pretty`, default `json`)
+- `LOG_SERVICE_NAME` (default `assura`)
 - `CHROMA_ENABLED`
 - `MONGODB_URI`
 
@@ -159,3 +162,4 @@ sudo systemctl status assura
 - Runtime files in `assistant/data/` are local state, not source code
 - Keep `assistant/.env`, `assistant/credentials.json`, and `assistant/token.json` secret
 - If Gmail token is revoked/expired, rerun `npm run auth`
+- Logs are structured JSON by default for monitoring systems (Datadog, ELK, CloudWatch, etc.)

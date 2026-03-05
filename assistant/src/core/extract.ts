@@ -1,11 +1,13 @@
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { OPENAI_API_KEY, OPENAI_MODEL } from "../config/env.js";
+import { logger } from "../observability/logger.js";
 import { applyToolCallableSemantics } from "./actionSemantics.js";
 import { formatMessageSender, type NormalizedMessage } from "./message.js";
 import { getToolCallableActionKinds } from "../../../shared/toolRegistry.js";
 import { EXTRACT_SCHEMA_VERSION, IMPORTANCE_LEVELS } from "./types.js";
 import type { MessageAssessment } from "./types.js";
+const extractLogger = logger.child({ component: "extract" });
 
 function buildModel(): ChatOpenAI {
   if (!OPENAI_API_KEY) {
@@ -169,7 +171,9 @@ export async function extractMessageAssessment(message: NormalizedMessage): Prom
     return applyToolCallableSemantics(validateExtractionShape(parsed));
   } catch (error) {
     if (raw) {
-      console.error(describeValidationFailure(error, raw).message);
+      extractLogger.warn("extract.validation_failed_initial", "Initial extraction validation failed", {
+        error: describeValidationFailure(error, raw).message
+      });
     }
 
     const repairPrompt = `Repair this content into ONLY valid JSON matching the required schema. Return ONLY JSON. No markdown.\n\n${raw || String(error)}`;
