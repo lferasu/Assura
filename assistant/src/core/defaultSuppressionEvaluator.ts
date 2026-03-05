@@ -13,6 +13,30 @@ import {
   type SuppressionRule
 } from "./suppression.js";
 
+function senderMatches(rule: SuppressionRule, senderEmail: string): boolean {
+  if (!rule.senderEmail) {
+    return false;
+  }
+
+  return rule.senderEmail === "*" || rule.senderEmail === senderEmail;
+}
+
+function keywordOverlap(rule: SuppressionRule, messageKeywords: string[]): number {
+  const ruleKeywords = rule.context.keywords || [];
+  if (ruleKeywords.length === 0 || messageKeywords.length === 0) {
+    return 0;
+  }
+
+  let matches = 0;
+  for (const keyword of ruleKeywords) {
+    if (messageKeywords.includes(keyword)) {
+      matches += 1;
+    }
+  }
+
+  return matches / Math.max(ruleKeywords.length, 1);
+}
+
 export class DefaultSuppressionEvaluator implements SuppressionEvaluator {
   constructor(
     private readonly ruleStore: SuppressionRuleStore,
@@ -36,7 +60,7 @@ export class DefaultSuppressionEvaluator implements SuppressionEvaluator {
         };
       }
 
-      if (!rule.senderEmail || rule.senderEmail !== senderEmail) {
+      if (!senderMatches(rule, senderEmail)) {
         continue;
       }
 
@@ -50,35 +74,52 @@ export class DefaultSuppressionEvaluator implements SuppressionEvaluator {
       }
     }
 
-    const contextRules = rules.filter(
-      (rule) => rule.isActive && rule.type === "SENDER_AND_CONTEXT" && rule.senderEmail === senderEmail
-    );
+    const contextRules = rules.filter((rule) => {
+      return rule.isActive && rule.type === "SENDER_AND_CONTEXT" && senderMatches(rule, senderEmail);
+    });
     if (contextRules.length === 0) {
       return { suppressed: false };
     }
 
-    if (!this.embeddingProvider) {
-      return { suppressed: false };
-    }
-
     const contextText = buildMessageContextText(input.message);
-    const messageEmbedding = await this.embeddingProvider.embedText(contextText);
     const keywords = extractKeywords(contextText);
     const topic = inferTopic(contextText, keywords);
+    const messageEmbedding = this.embeddingProvider
+      ? await this.embeddingProvider.embedText(contextText)
+      : null;
 
     for (const rule of contextRules) {
       const ruleEmbedding = rule.context.embedding;
-      if (!ruleEmbedding || ruleEmbedding.length === 0) {
-        continue;
+      if (messageEmbedding && ruleEmbedding && ruleEmbedding.length > 0) {
+        const similarity = cosineSimilarity(messageEmbedding, ruleEmbedding);
+        if (similarity >= getSuppressionThreshold(rule)) {
+          return {
+            suppressed: true,
+            rule,
+            reason:
+              rule.senderEmail === "*"
+                ? "Matched muted content pattern"
+                : `Matched muted sender context for ${senderEmail}`,
+            similarity,
+            keywords,
+            topic
+          };
+        }
       }
 
-      const similarity = cosineSimilarity(messageEmbedding, ruleEmbedding);
-      if (similarity >= getSuppressionThreshold(rule)) {
+      const overlap = keywordOverlap(rule, keywords);
+      const topicMatches =
+        Boolean(rule.context.topic && topic) &&
+        topic!.toLowerCase().includes((rule.context.topic || "").toLowerCase());
+      if (overlap >= 0.5 || topicMatches) {
         return {
           suppressed: true,
           rule,
-          reason: `Matched muted sender context for ${senderEmail}`,
-          similarity,
+          reason:
+            rule.senderEmail === "*"
+              ? "Matched muted content pattern"
+              : `Matched muted sender context for ${senderEmail}`,
+          similarity: overlap,
           keywords,
           topic
         };

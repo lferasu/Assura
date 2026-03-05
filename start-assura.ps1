@@ -1,6 +1,5 @@
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $assistantDir = Join-Path $repoRoot "assistant"
-$mobileDir = Join-Path $repoRoot "mobile"
 
 function New-AssuraCommand {
   param(
@@ -41,16 +40,6 @@ function Start-AssuraTabs {
       Title = "Assura Poller"
       WorkingDirectory = $assistantDir
       Command = "npm run poll"
-    },
-    @{
-      Title = "Assura API"
-      WorkingDirectory = $assistantDir
-      Command = "npm run api"
-    },
-    @{
-      Title = "Assura Mobile"
-      WorkingDirectory = $mobileDir
-      Command = "npm run start"
     }
   )
 
@@ -82,6 +71,4 @@ if (Get-Command wt -ErrorAction SilentlyContinue) {
   Start-AssuraTabs
 } else {
   Start-AssuraWindow -Title "Assura Poller" -WorkingDirectory $assistantDir -Command "npm run poll"
-  Start-AssuraWindow -Title "Assura API" -WorkingDirectory $assistantDir -Command "npm run api"
-  Start-AssuraWindow -Title "Assura Mobile" -WorkingDirectory $mobileDir -Command "npm run start"
 }

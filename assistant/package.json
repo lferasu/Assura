@@ -8,10 +8,7 @@
   },
   "scripts": {
     "auth": "tsx src/runners/oauthToken.ts",
-    "api": "tsx src/runners/apiServer.ts",
-    "backfill:chroma": "tsx src/runners/backfillChroma.ts",
     "poll": "tsx src/runners/localPoll.ts",
-    "server": "tsx src/server/httpServer.ts",
     "test": "node --import tsx --test test/**/*.test.ts",
     "typecheck": "tsc --noEmit"
   },

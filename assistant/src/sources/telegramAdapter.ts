@@ -1,38 +1,12 @@
-import {
-  createNormalizedMessage,
-  type NormalizedMessage
-} from "../core/message.js";
-import { TELEGRAM_BOT_TOKEN } from "../config/env.js";
+import { createNormalizedMessage, type NormalizedMessage } from "../core/message.js";
 import type { FetchResult, MessageSourceAdapter, SourceCursor } from "./types.js";
-
-interface TelegramUser {
-  id?: number;
-  first_name?: string;
-  last_name?: string;
-}
-
-interface TelegramChat {
-  id?: number;
-}
-
-interface TelegramMessagePayload {
-  message_id?: number;
-  chat?: TelegramChat;
-  from?: TelegramUser;
-  date?: number;
-  text?: string;
-  caption?: string;
-}
-
-interface TelegramUpdate {
-  update_id?: number;
-  message?: TelegramMessagePayload;
-}
-
-interface TelegramGetUpdatesResponse {
-  ok: boolean;
-  result?: TelegramUpdate[];
-}
+import {
+  getLastTelegramUpdateId,
+  TelegramClient,
+  type TelegramMessage,
+  type TelegramUpdate,
+  type TelegramUser
+} from "../telegram/telegramClient.js";
 
 function asLastUpdateId(cursor: SourceCursor): number {
   const raw = cursor.lastUpdateId;
@@ -44,9 +18,18 @@ function buildSenderName(user?: TelegramUser): string | undefined {
   return name || undefined;
 }
 
+export function isTelegramCommandMessage(message?: TelegramMessage): boolean {
+  const text = message?.text?.trim();
+  return Boolean(text && text.startsWith("/"));
+}
+
 export function mapTelegramUpdateToNormalizedMessage(update: TelegramUpdate): NormalizedMessage | null {
   const message = update.message;
   if (!message?.message_id || !message.chat?.id || !message.date) {
+    return null;
+  }
+
+  if (isTelegramCommandMessage(message)) {
     return null;
   }
 
@@ -75,64 +58,50 @@ export function mapTelegramUpdateToNormalizedMessage(update: TelegramUpdate): No
 }
 
 export class TelegramSourceAdapter implements MessageSourceAdapter {
+  private readonly client: TelegramClient;
+
   constructor(
     private readonly input: {
       botToken?: string;
       fetchImpl?: typeof fetch;
     } = {}
-  ) {}
+  ) {
+    this.client = new TelegramClient(input);
+  }
 
   key(): string {
     return "telegram:bot";
   }
 
   async fetchNew(cursor: SourceCursor): Promise<FetchResult> {
-    const botToken = this.input.botToken ?? TELEGRAM_BOT_TOKEN;
-    if (!botToken) {
-      return {
-        messages: [],
-        nextCursor: { lastUpdateId: asLastUpdateId(cursor) }
-      };
-    }
-
     const lastUpdateId = asLastUpdateId(cursor);
-    const offset = lastUpdateId > 0 ? lastUpdateId + 1 : 0;
-    const fetchImpl = this.input.fetchImpl ?? fetch;
-    const url = new URL(`https://api.telegram.org/bot${botToken}/getUpdates`);
-    url.searchParams.set("timeout", "0");
-    if (offset > 0) {
-      url.searchParams.set("offset", String(offset));
-    }
+    let updates: TelegramUpdate[];
 
-    const response = await fetchImpl(url);
-    if (!response.ok) {
-      throw new Error(`Telegram getUpdates failed with status ${response.status}`);
-    }
-
-    const payload = (await response.json()) as TelegramGetUpdatesResponse;
-    if (!payload.ok) {
-      throw new Error("Telegram getUpdates returned ok=false");
-    }
-
-    const updates = Array.isArray(payload.result) ? payload.result : [];
-    let nextLastUpdateId = lastUpdateId;
-    const messages: NormalizedMessage[] = [];
-
-    for (const update of updates) {
-      if (typeof update.update_id !== "number") {
-        continue;
+    try {
+      updates = await this.client.getUpdates({
+        offset: lastUpdateId > 0 ? lastUpdateId + 1 : undefined
+      });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === "TELEGRAM_BOT_TOKEN is required."
+      ) {
+        return {
+          messages: [],
+          nextCursor: { lastUpdateId }
+        };
       }
 
-      nextLastUpdateId = Math.max(nextLastUpdateId, update.update_id);
-      const normalized = mapTelegramUpdateToNormalizedMessage(update);
-      if (normalized) {
-        messages.push(normalized);
-      }
+      throw error;
     }
+
+    const messages = updates
+      .map((update) => mapTelegramUpdateToNormalizedMessage(update))
+      .filter((message): message is NormalizedMessage => Boolean(message));
 
     return {
       messages,
-      nextCursor: { lastUpdateId: nextLastUpdateId }
+      nextCursor: { lastUpdateId: getLastTelegramUpdateId(updates, lastUpdateId) }
     };
   }
 }

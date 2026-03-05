@@ -1,4 +1,7 @@
 # Dependencies
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
 /assistant/node_modules/
 /mobile/node_modules/
 
@@ -27,3 +30,27 @@ npm-debug.log*
 
 # Accidental root-level npm artifacts
 /package-lock.json
+=======
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+assistant/node_modules/
+
+# Environment and local secrets
+assistant/.env
+assistant/credentials.json
+assistant/token.json
+
+# Runtime data
+assistant/data/*.log
+
+# Removed UI workspace
+mobile/
+<<<<<<< ours
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs

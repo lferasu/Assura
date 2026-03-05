@@ -13,11 +13,14 @@ import { MongoSuppressionRuleStore } from "../adapters/mongoSuppressionRuleStore
 import { notifyProcessed, notifySkipped } from "../adapters/consoleNotifier.js";
 import { GmailSourceAdapter } from "../adapters/gmailSource.js";
 import {
+  getTelegramAdminChatId,
+  getTelegramUiCursor,
   getSourceCursor,
   isProcessed,
   loadState,
   markProcessed,
   saveState,
+  setTelegramUiCursor,
   setSourceCursor,
   type PersistedState
 } from "../adapters/fileStateStore.js";
@@ -35,7 +38,19 @@ import { DefaultSuppressionEvaluator } from "../core/defaultSuppressionEvaluator
 import { OpenAIEmbeddingService, type EmbeddingProvider } from "../core/embeddingService.js";
 import type { PipelineDependencies } from "../core/contracts.js";
 import { runPipelineOnMessage } from "../core/pipeline.js";
-import { TelegramSourceAdapter } from "../sources/telegramAdapter.js";
+import { saveProcessedMessage } from "../storage/messageStore.js";
+import {
+  getLastTelegramUpdateId,
+  TelegramClient,
+  type TelegramUpdate
+} from "../telegram/telegramClient.js";
+import {
+  TelegramUiController
+} from "../telegram/telegramUi.js";
+import {
+  isTelegramCommandMessage,
+  mapTelegramUpdateToNormalizedMessage
+} from "../sources/telegramAdapter.js";
 import type { MessageSourceAdapter } from "../sources/types.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -97,7 +112,9 @@ async function processMessages(
   sourceKey: string,
   messages: NormalizedMessage[],
   dependencies: PipelineDependencies,
-  targetStatePath: string
+  targetStatePath: string,
+  processedMessagesStorePath: string,
+  telegramUi?: TelegramUiController
 ): Promise<PollStats> {
   let alreadyProcessed = 0;
   let processed = 0;
@@ -142,6 +159,16 @@ async function processMessages(
         actionItems: result.actionItems,
         preparedActions: result.preparedActions
       });
+      await saveProcessedMessage({
+        filePath: processedMessagesStorePath,
+        message,
+        summary: result.summary,
+        importance: result.extracted.importance,
+        category: result.extracted.category
+      });
+      if (telegramUi) {
+        await telegramUi.sendProcessedSummary({ message, result });
+      }
 
       markProcessed(state, sourceKey, message.externalId, { skipped: false });
       processed += 1;
@@ -163,6 +190,106 @@ async function processMessages(
   };
 }
 
+function asLastUpdateId(cursor: Record<string, unknown>): number {
+  const raw = cursor.lastUpdateId;
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : 0;
+}
+
+function getSharedTelegramOffset(sourceLastUpdateId: number, uiLastUpdateId: number): number | undefined {
+  const candidates = [sourceLastUpdateId, uiLastUpdateId]
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .map((value) => value + 1);
+
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  return Math.min(...candidates);
+}
+
+async function pollTelegramSourceAndUi(input: {
+  state: PersistedState;
+  statePath: string;
+  dependencies: PipelineDependencies;
+  projectRoot: string;
+  telegramUi?: TelegramUiController;
+}): Promise<PollStats> {
+  if (!TELEGRAM_BOT_TOKEN) {
+    return {
+      fetched: 0,
+      alreadyProcessed: 0,
+      processed: 0,
+      suppressed: 0,
+      skipped: 0,
+      failed: 0
+    };
+  }
+
+  const sourceKey = "telegram:bot";
+  const sourceLastUpdateId = asLastUpdateId(getSourceCursor(input.state, sourceKey));
+  const uiLastUpdateId = getTelegramUiCursor(input.state);
+  const client = new TelegramClient();
+  const updates = await client.getUpdates({
+    offset: getSharedTelegramOffset(sourceLastUpdateId, uiLastUpdateId)
+  });
+
+  const adminChatId = getTelegramAdminChatId(input.state);
+  const sourceUpdates = updates.filter((update) => {
+    if (typeof update.update_id !== "number" || update.update_id <= sourceLastUpdateId) {
+      return false;
+    }
+
+    if (!update.message || isTelegramCommandMessage(update.message)) {
+      return false;
+    }
+
+    if (adminChatId && String(update.message.chat?.id || "") === adminChatId) {
+      return false;
+    }
+
+    return true;
+  });
+
+  const sourceMessages = sourceUpdates
+    .map((update) => mapTelegramUpdateToNormalizedMessage(update))
+    .filter((message): message is NormalizedMessage => Boolean(message));
+
+  const telegramUi =
+    input.telegramUi ??
+    new TelegramUiController({
+      client,
+      state: input.state,
+      statePath: input.statePath,
+      processedMessagesStorePath: path.join(input.projectRoot, "data/processed-messages.jsonl")
+    });
+
+  const stats = await processMessages(
+    input.state,
+    sourceKey,
+    sourceMessages,
+    input.dependencies,
+    input.statePath,
+    path.join(input.projectRoot, "data/processed-messages.jsonl"),
+    telegramUi
+  );
+
+  const uiUpdates = updates.filter(
+    (update) => typeof update.update_id === "number" && update.update_id > uiLastUpdateId
+  );
+  await telegramUi.handleUpdates(uiUpdates);
+
+  if (stats.failed === 0) {
+    setSourceCursor(input.state, sourceKey, {
+      lastUpdateId: getLastTelegramUpdateId(updates, sourceLastUpdateId)
+    });
+  }
+
+  setTelegramUiCursor(input.state, getLastTelegramUpdateId(uiUpdates, uiLastUpdateId));
+  await saveState(input.statePath, input.state);
+
+  return stats;
+}
+
 export async function pollOnceWithSource(options?: {
   userId?: string;
   projectRoot?: string;
@@ -174,14 +301,22 @@ export async function pollOnceWithSource(options?: {
   const currentStatePath = options?.statePath ?? statePath;
   const state = await loadState(currentStatePath);
   const dependencies = options?.dependencies ?? buildPipelineDependencies(options?.userId);
+  const telegramUi =
+    TELEGRAM_BOT_TOKEN && !options?.adapters
+      ? new TelegramUiController({
+          client: new TelegramClient(),
+          state,
+          statePath: currentStatePath,
+          processedMessagesStorePath: path.join(currentProjectRoot, "data/processed-messages.jsonl")
+        })
+      : undefined;
   const adapters =
     options?.adapters ??
     [
       new GmailSourceAdapter({
         projectRoot: currentProjectRoot,
         maxMessages: GMAIL_MAX_MESSAGES
-      }),
-      ...(TELEGRAM_BOT_TOKEN ? [new TelegramSourceAdapter()] : [])
+      })
     ];
 
   const totals: PollStats = {
@@ -203,7 +338,9 @@ export async function pollOnceWithSource(options?: {
       sourceKey,
       result.messages,
       dependencies,
-      currentStatePath
+      currentStatePath,
+      path.join(currentProjectRoot, "data/processed-messages.jsonl"),
+      telegramUi
     );
 
     if (stats.failed === 0) {
@@ -218,6 +355,25 @@ export async function pollOnceWithSource(options?: {
     totals.skipped += stats.skipped;
     totals.failed += stats.failed;
   }
+
+  if (TELEGRAM_BOT_TOKEN && !options?.adapters) {
+    const telegramStats = await pollTelegramSourceAndUi({
+      state,
+      statePath: currentStatePath,
+      dependencies,
+      projectRoot: currentProjectRoot,
+      telegramUi
+    });
+
+    totals.fetched += telegramStats.fetched;
+    totals.alreadyProcessed += telegramStats.alreadyProcessed;
+    totals.processed += telegramStats.processed;
+    totals.suppressed += telegramStats.suppressed;
+    totals.skipped += telegramStats.skipped;
+    totals.failed += telegramStats.failed;
+  }
+
+  await saveState(currentStatePath, state);
 
   return totals;
 }

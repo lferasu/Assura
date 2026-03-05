@@ -89,3 +89,18 @@ test("Telegram adapter keeps cursor unchanged when there are no updates", async 
   assert.equal(result.messages.length, 0);
   assert.deepEqual(result.nextCursor, { lastUpdateId: 22 });
 });
+
+test("Telegram adapter ignores slash commands as source messages", () => {
+  const message = mapTelegramUpdateToNormalizedMessage({
+    update_id: 500,
+    message: {
+      message_id: 100,
+      chat: { id: 777 },
+      from: { id: 123, first_name: "Sura" },
+      date: 1_772_589_200,
+      text: "/start"
+    }
+  });
+
+  assert.equal(message, null);
+});
