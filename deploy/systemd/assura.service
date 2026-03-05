@@ -1,0 +1,14 @@
+[Unit]
+Description=Assura Telegram Poller
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/assura/assistant
+ExecStart=/usr/bin/npm run poll
+Restart=always
+RestartSec=10
+EnvironmentFile=/opt/assura/assistant/.env
+
+[Install]
+WantedBy=multi-user.target

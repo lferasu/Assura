@@ -1,261 +1,161 @@
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-# Assura (Telegram-First, Assistant Mode)
+# Assura
 
-Assura is a local assistant that ingests messages from pluggable sources and pushes important items to a Telegram bot chat.
+Assura is a Telegram-first message assistant.
 
-Current product scope:
-- ingest from Gmail and Telegram source adapters
-- process/score message importance
-- push important messages to Telegram automatically
-- support `/update` and `/brief` for Gmail briefing since last check
+It polls connected sources, extracts actionable signal with an LLM pipeline, stores compact processed records, and interacts with users through a Telegram bot.
 
-Out of scope in this trimmed version:
-- mobile UI workflows
-- HTTP API gateway workflows
-- rule-management UX in Telegram
+## Current Product Scope
 
-The architecture keeps extension points for:
-- adding new message sources through source adapters
-- connecting additional UIs/notifiers later
-
-## Core Flow
-
-On each poll cycle:
-1. Load local state from `assistant/data/state.json`.
-2. Pull new messages from configured source adapters.
-3. Process messages through the existing extraction pipeline.
-4. Persist processed message projections to `assistant/data/processed-messages.jsonl`.
-5. Push important processed messages to the bound Telegram admin chat.
-6. Handle Telegram commands (`/start`, `/help`, `/update`, `/brief`).
+- Source ingestion: Gmail and Telegram
+- Processing pipeline: gate, extract, summarize, suppress
+- Delivery:
+  - automatic Telegram push for important messages
+  - Telegram commands for on-demand updates
+- Briefing:
+  - `/update` and `/brief` return important email updates
+  - if no new important emails exist, Assura still returns recent reviewed important emails
 
 ## Telegram Commands
 
-- `/start`: bind current chat as admin chat
-- `/help`: show command list
-- `/update`: return important Gmail emails since last update
-- `/brief`: alias for `/update`
+- `/start` bind current chat as admin chat
+- `/help` show command list
+- `/update` return latest important email update
+- `/brief` alias for `/update`
 
-`/update` behavior:
-- Returns top important Gmail emails since `user.lastEmailUpdateAt`.
-- Advances `lastEmailUpdateAt` after response.
-- If no new important email exists, returns:
-  - `Assura is up to date`
-  - plus the last important email marked as already viewed (if any).
+## Architecture
 
-## Setup
+Assura keeps source adapters and UI controllers separate:
 
-From repo root:
+- source adapters normalize external input into internal `NormalizedMessage`
+- pipeline processes normalized messages independently of UI
+- UI controllers decide how to present results and handle commands
+
+Telegram is the active UI today, but the codebase keeps a UI controller boundary for additional front ends later.
+
+## Repository Layout
+
+- `assistant/` core application
+  - `src/adapters/` source/storage integrations
+  - `src/core/` pipeline logic
+  - `src/telegram/` Telegram client and UI controller
+  - `src/ui/` UI contracts
+  - `src/runners/localPoll.ts` long-running poller
+  - `src/runners/oauthToken.ts` Gmail OAuth helper
+  - `data/` runtime state and logs
+- `shared/` shared rule/registry modules used by assistant
+- `deploy/systemd/assura.service` production systemd template
+- `start-assura.ps1` convenience launcher for local Windows usage
+
+## Prerequisites
+
+- Node.js 20+
+- Telegram bot token
+- OpenAI API key
+- Gmail OAuth client credentials (for Gmail ingestion)
+
+## Local Setup
 
 ```bash
 cd assistant
 npm install
-```
-
-Configure env:
-
-```bash
 cp .env.example .env
 ```
 
-Required:
+Required `.env` values:
+
 - `OPENAI_API_KEY`
 - `TELEGRAM_BOT_TOKEN`
 
-Recommended:
-- `GMAIL_MAX_MESSAGES`
-- `POLL_INTERVAL_SECONDS`
+Useful optional values:
 
-Gmail OAuth:
-- Place `credentials.json` in `assistant/`.
-- Run `npm run poll` once and complete token flow to create `token.json`.
+- `POLL_INTERVAL_SECONDS` (default `120`)
+- `TELEGRAM_UI_POLL_INTERVAL_SECONDS` (default `3`)
+- `GMAIL_MAX_MESSAGES` (default `15`)
+- `CHROMA_ENABLED`
+- `MONGODB_URI`
 
-Start:
+Gmail auth files:
+
+- place `assistant/credentials.json`
+- generate `assistant/token.json`:
 
 ```bash
+npm run auth
+```
+
+## Run
+
+```bash
+cd assistant
 npm run poll
 ```
 
 Then in Telegram:
-1. Send `/start` to your bot.
-2. Wait for poll cycle or send new messages to sources.
-3. Receive automatic important-message pushes.
-4. Use `/update` anytime for latest Gmail briefing.
 
-## Data Files
+1. send `/start`
+2. use `/help`
+3. use `/update` for latest briefing
 
-- `assistant/data/state.json`: source cursors + Telegram admin chat binding + update watermark
-- `assistant/data/message-assessments.jsonl`: full processed assessments
-- `assistant/data/processed-messages.jsonl`: compact records used by `/update`
-
-## Developer Commands
+## Testing
 
 ```bash
-npm run poll
-npm run typecheck
+cd assistant
 npm test
-=======
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
-# Assura Agent
+npm run typecheck
+```
 
-Assura is a **Gmail polling agent** that watches incoming messages, detects school schedule-impacting announcements, extracts structured schedule data with an LLM, and prints a human-readable summary plus JSON calendar proposals.
+## Deployment
 
-## What this agent does
+### Option A: Docker
 
-On a loop, the agent:
-
-1. Reads previously saved state from `assistant/data/state.json`.
-2. Pulls recent messages from Gmail using the Gmail API.
-3. Filters each message with keyword/date gating logic.
-4. Runs LLM extraction to produce strict schedule-impact JSON.
-5. Generates a readable summary of schedule changes.
-6. Logs either:
-   - a processed schedule-impact result, or
-   - a skip reason.
-7. Marks each message as processed and updates the poll cursor so messages are not reprocessed.
-
-## Project structure
-
-- `assistant/src/runners/localPoll.js` – long-running local poll loop.
-- `assistant/src/adapters/gmailSource.js` – Gmail OAuth + message fetch + text extraction.
-- `assistant/src/core/gate.js` – lightweight schedule-impact gating logic.
-- `assistant/src/core/extract.js` – LLM JSON extraction + schema validation.
-- `assistant/src/core/summarize.js` – concise human-readable summary generation.
-- `assistant/src/adapters/fileStateStore.js` – JSON state persistence.
-- `assistant/src/adapters/consoleNotifier.js` – terminal output for processed/skipped messages.
-
-## Requirements
-
-- Node.js 20+
-- A Google Cloud project with Gmail API enabled
-- OAuth client credentials (`Desktop app` works well)
-- OpenAI API key (or compatible key for the configured model)
-
-## Environment variables
-
-Copy and edit:
+Build from repo root:
 
 ```bash
-cp assistant/.env.example assistant/.env
+docker build -f assistant/Dockerfile -t assura:latest .
 ```
 
-Variables:
+Run:
 
-- `OPENAI_API_KEY` – required
-- `OPENAI_MODEL` – defaults to `gpt-4.1-mini`
-- `POLL_INTERVAL_SECONDS` – defaults to `120`
-- `GMAIL_MAX_MESSAGES` – defaults to `15`
-
-## Run locally
-
-From repository root:
-
-1. Install dependencies:
-
-   ```bash
-   cd assistant
-   npm install
-   ```
-
-2. Add OAuth credentials file:
-
-   - Place `credentials.json` in `assistant/`.
-
-3. Generate OAuth token (`assistant/token.json`):
-
-   - Run once:
-
-     ```bash
-     npm run poll
-     ```
-
-   - If `token.json` is missing, the app prints an authorization URL.
-   - Complete consent, obtain token JSON, and save it to `assistant/token.json`.
-
-4. Start polling:
-
-   ```bash
-   npm run poll
-   ```
-
-The process runs continuously and logs processed/ skipped messages to stdout.
-
-## Deploy
-
-Because this agent is a long-running poller, it deploys well as a small worker service.
-
-### Option A: VM/container with process manager (recommended)
-
-1. Provision a host with Node.js 20+.
-2. Copy the repo (or build artifact) to the host.
-3. Place secret files and env:
-   - `assistant/.env`
-   - `assistant/credentials.json`
-   - `assistant/token.json`
-4. Install production deps:
-
-   ```bash
-   cd assistant
-   npm ci --omit=dev
-   ```
-
-5. Run with a supervisor (`systemd`, `pm2`, or container restart policy).
-
-`systemd` example `assura-agent.service`:
-
-```ini
-[Unit]
-Description=Assura Gmail Poll Agent
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/assura/assistant
-ExecStart=/usr/bin/npm run poll
-Restart=always
-RestartSec=10
-EnvironmentFile=/opt/assura/assistant/.env
-
-[Install]
-WantedBy=multi-user.target
+```bash
+docker run -d \
+  --name assura \
+  --restart unless-stopped \
+  --env-file assistant/.env \
+  -v %cd%/assistant/data:/app/assistant/data \
+  -v %cd%/assistant/credentials.json:/app/assistant/credentials.json:ro \
+  -v %cd%/assistant/token.json:/app/assistant/token.json:ro \
+  assura:latest
 ```
 
-Then:
+On Linux/macOS, replace `%cd%` with `${PWD}`.
+
+### Option B: systemd (Linux VM)
+
+1. Copy repo to `/opt/assura`
+2. Install production dependencies:
+
+```bash
+cd /opt/assura/assistant
+npm ci --omit=dev
+```
+
+3. Copy service template:
+
+```bash
+sudo cp /opt/assura/deploy/systemd/assura.service /etc/systemd/system/assura.service
+```
+
+4. Enable and start:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable assura-agent
-sudo systemctl start assura-agent
-sudo systemctl status assura-agent
+sudo systemctl enable assura
+sudo systemctl start assura
+sudo systemctl status assura
 ```
 
-### Option B: Scheduled/serverless execution
+## Operational Notes
 
-If your platform does not support long-lived processes, you can adapt the runner to execute a single poll pass (extract `pollOnce`) and trigger it on a schedule (e.g., every 1–5 minutes with Cloud Scheduler/Cron).
-
-## Operational notes
-
-- `assistant/data/state.json` tracks processed message IDs and last Gmail cursor.
-- Keep `token.json` and `credentials.json` secret.
-- If OAuth refresh tokens expire/revoke, regenerate `token.json`.
-- Start with lower `GMAIL_MAX_MESSAGES` while validating behavior.
-
-## Quick start
-
-```bash
-cp assistant/.env.example assistant/.env
-cd assistant
-npm install
-npm run poll
-<<<<<<< ours
-<<<<<<< ours
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
-```
+- Runtime files in `assistant/data/` are local state, not source code
+- Keep `assistant/.env`, `assistant/credentials.json`, and `assistant/token.json` secret
+- If Gmail token is revoked/expired, rerun `npm run auth`

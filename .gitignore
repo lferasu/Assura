@@ -1,56 +1,36 @@
 # Dependencies
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-/assistant/node_modules/
-/mobile/node_modules/
+assistant/node_modules/
+mobile/node_modules/
 
 # Local environment and secrets
-/assistant/.env
-/assistant/credentials.json
-/assistant/token.json
-/mobile/.env
-
-# Generated runtime data
-/assistant/data/*.jsonl
-/assistant/data/state.json
-/assistant/data/mobile-status.json
-/assistant/data/expectations.json
-/mobile/.expo/
-/mobile/dist/
-
-# Logs
-*.log
-npm-debug.log*
-
-# Editor settings
-/.vscode/*
-!/.vscode/launch.json
-/mobile/.idea/
-
-# Accidental root-level npm artifacts
-/package-lock.json
-=======
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
-assistant/node_modules/
-
-# Environment and local secrets
 assistant/.env
 assistant/credentials.json
 assistant/token.json
+mobile/.env
 
-# Runtime data
+# Runtime data and logs
+assistant/data/*.jsonl
 assistant/data/*.log
+assistant/data/state.json
+assistant/data/mobile-status.json
+assistant/data/expectations.json
+*.log
+npm-debug.log*
 
-# Removed UI workspace
+# Build/deploy
+mobile/.expo/
+mobile/dist/
+assistant/dist/
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+/.vscode/*
+!/.vscode/launch.json
+mobile/.idea/
+
+# Deprecated workspace
 mobile/
-<<<<<<< ours
-<<<<<<< ours
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
+
+# Accidental root npm artifact
+/package-lock.json

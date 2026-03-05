@@ -50,6 +50,7 @@ export const OPENAI_API_KEY = readEnv("OPENAI_API_KEY") ?? "";
 export const OPENAI_MODEL = readEnv("OPENAI_MODEL") ?? "gpt-4.1-mini";
 export const EMBEDDING_MODEL = readEnv("EMBEDDING_MODEL") ?? "text-embedding-3-small";
 export const POLL_INTERVAL_SECONDS = readNumberEnv("POLL_INTERVAL_SECONDS", 120);
+export const TELEGRAM_UI_POLL_INTERVAL_SECONDS = readNumberEnv("TELEGRAM_UI_POLL_INTERVAL_SECONDS", 3);
 export const GMAIL_MAX_MESSAGES = readNumberEnv("GMAIL_MAX_MESSAGES", 15);
 export const API_PORT = readNumberEnv("API_PORT", 8787);
 export const CHROMA_ENABLED = readBooleanEnv("CHROMA_ENABLED", false);

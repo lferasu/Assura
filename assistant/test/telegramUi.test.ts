@@ -98,7 +98,7 @@ test("/start binds admin chat", async () => {
   assert.match(client.sentMessages[0].text, /Assura connected/);
 });
 
-test("/update returns up-to-date with already viewed item when no new email", async () => {
+test("/update returns up-to-date with latest reviewed items when no new email", async () => {
   const { controller, client, state } = await createController({
     withImportantRecord: true,
     state: {
@@ -128,7 +128,8 @@ test("/update returns up-to-date with already viewed item when no new email", as
 
   const response = client.sentMessages[0]?.text || "";
   assert.match(response, /Assura is up to date/);
-  assert.match(response, /already viewed/);
+  assert.match(response, /No new important emails since your last check/);
+  assert.match(response, /Latest important emails \(already reviewed\)/);
   assert.ok(state.user?.lastEmailUpdateAt);
 });
 

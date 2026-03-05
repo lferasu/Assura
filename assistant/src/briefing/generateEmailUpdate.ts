@@ -1,6 +1,6 @@
 import {
   queryImportantEmailsSince,
-  queryLatestImportantEmail,
+  queryLatestImportantEmails,
   type ProcessedMessageRecord
 } from "../storage/messageStore.js";
 
@@ -50,10 +50,12 @@ export async function generateEmailUpdate(input: {
   filePath: string;
   lastEmailUpdateAt?: string | null;
   limit?: number;
+  fallbackLimit?: number;
   now?: Date;
 }): Promise<EmailUpdateResult> {
   const now = input.now ?? new Date();
   const limit = Math.max(1, input.limit ?? 10);
+  const fallbackLimit = Math.max(1, input.fallbackLimit ?? 3);
   const sinceIsoTimestamp = input.lastEmailUpdateAt || getDefaultSinceIso(now);
   const records = await queryImportantEmailsSince({
     filePath: input.filePath,
@@ -62,15 +64,19 @@ export async function generateEmailUpdate(input: {
   });
 
   if (records.length === 0) {
-    const lastViewed = await queryLatestImportantEmail({ filePath: input.filePath });
-    if (lastViewed) {
+    const latestViewed = await queryLatestImportantEmails({
+      filePath: input.filePath,
+      limit: fallbackLimit
+    });
+    if (latestViewed.length > 0) {
       return {
         text: [
           "\u2705 Assura is up to date.",
+          "No new important emails since your last check.",
           "",
-          "Last important email (already viewed):",
+          "Latest important emails (already reviewed):",
           "",
-          formatItem(lastViewed, 0),
+          ...latestViewed.map((record, index) => formatItem(record, index)),
           "",
           "Tip: Use /update anytime to see what matters."
         ].join("\n"),

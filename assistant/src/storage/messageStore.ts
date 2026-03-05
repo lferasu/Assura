@@ -139,12 +139,13 @@ export async function queryImportantEmailsSince(input: {
     .slice(0, Math.max(1, input.limit));
 }
 
-export async function queryLatestImportantEmail(input: {
+export async function queryLatestImportantEmails(input: {
   filePath: string;
-}): Promise<ProcessedMessageRecord | null> {
+  limit: number;
+}): Promise<ProcessedMessageRecord[]> {
   const records = await readJsonLines<ProcessedMessageRecord>(input.filePath);
 
-  const match = records
+  return records
     .filter((record) => record.source === "gmail" && record.importanceScore >= 3)
     .sort((left, right) => {
       const leftReceived = new Date(left.receivedAt).getTime();
@@ -154,7 +155,6 @@ export async function queryLatestImportantEmail(input: {
       }
 
       return right.importanceScore - left.importanceScore;
-    })[0];
-
-  return match || null;
+    })
+    .slice(0, Math.max(1, input.limit));
 }

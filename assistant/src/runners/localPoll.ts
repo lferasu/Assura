@@ -31,6 +31,7 @@ import {
   MONGODB_URI,
   OPENAI_API_KEY,
   POLL_INTERVAL_SECONDS,
+  TELEGRAM_UI_POLL_INTERVAL_SECONDS,
   TELEGRAM_BOT_TOKEN
 } from "../config/env.js";
 import { getStableMessageKey, type NormalizedMessage } from "../core/message.js";
@@ -47,6 +48,7 @@ import {
 import {
   TelegramUiController
 } from "../telegram/telegramUi.js";
+import type { AssistantUiController } from "../ui/contracts.js";
 import {
   isTelegramCommandMessage,
   mapTelegramUpdateToNormalizedMessage
@@ -114,7 +116,7 @@ async function processMessages(
   dependencies: PipelineDependencies,
   targetStatePath: string,
   processedMessagesStorePath: string,
-  telegramUi?: TelegramUiController
+  uiController?: AssistantUiController
 ): Promise<PollStats> {
   let alreadyProcessed = 0;
   let processed = 0;
@@ -166,8 +168,8 @@ async function processMessages(
         importance: result.extracted.importance,
         category: result.extracted.category
       });
-      if (telegramUi) {
-        await telegramUi.sendProcessedSummary({ message, result });
+      if (uiController) {
+        await uiController.sendProcessedSummary({ message, result });
       }
 
       markProcessed(state, sourceKey, message.externalId, { skipped: false });
@@ -290,6 +292,36 @@ async function pollTelegramSourceAndUi(input: {
   return stats;
 }
 
+export async function pollTelegramOnlyWithSource(options?: {
+  userId?: string;
+  projectRoot?: string;
+  statePath?: string;
+  dependencies?: PipelineDependencies;
+}): Promise<PollStats> {
+  if (!TELEGRAM_BOT_TOKEN) {
+    return {
+      fetched: 0,
+      alreadyProcessed: 0,
+      processed: 0,
+      suppressed: 0,
+      skipped: 0,
+      failed: 0
+    };
+  }
+
+  const currentProjectRoot = options?.projectRoot ?? projectRoot;
+  const currentStatePath = options?.statePath ?? statePath;
+  const state = await loadState(currentStatePath);
+  const dependencies = options?.dependencies ?? buildPipelineDependencies(options?.userId);
+
+  return pollTelegramSourceAndUi({
+    state,
+    statePath: currentStatePath,
+    dependencies,
+    projectRoot: currentProjectRoot
+  });
+}
+
 export async function pollOnceWithSource(options?: {
   userId?: string;
   projectRoot?: string;
@@ -386,22 +418,55 @@ async function runForever(): Promise<void> {
   if (!TELEGRAM_BOT_TOKEN) {
     console.log("Telegram disabled (no token)");
   }
+  const fastPollDependencies = TELEGRAM_BOT_TOKEN ? buildPipelineDependencies() : undefined;
 
   while (true) {
+    const cycleStartedAt = Date.now();
+
     try {
       const stats = await pollOnceWithSource();
       console.log(
         `Poll completed. fetched=${stats.fetched} processed=${stats.processed} suppressed=${stats.suppressed} skipped=${stats.skipped} failed=${stats.failed} alreadyProcessed=${stats.alreadyProcessed}`
       );
-      console.log(`Waiting ${POLL_INTERVAL_SECONDS} seconds before next poll...`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("Poll error:", message);
     }
 
-    await new Promise((resolve) => {
-      setTimeout(resolve, POLL_INTERVAL_SECONDS * 1000);
-    });
+    const cycleEndsAt = cycleStartedAt + POLL_INTERVAL_SECONDS * 1000;
+    const telegramTickMs = Math.max(1, TELEGRAM_UI_POLL_INTERVAL_SECONDS) * 1000;
+
+    if (!TELEGRAM_BOT_TOKEN) {
+      const sleepMs = Math.max(0, cycleEndsAt - Date.now());
+      console.log(`Waiting ${Math.ceil(sleepMs / 1000)} seconds before next poll...`);
+      await new Promise((resolve) => {
+        setTimeout(resolve, sleepMs);
+      });
+      continue;
+    }
+
+    console.log(
+      `Waiting ${Math.ceil(Math.max(0, cycleEndsAt - Date.now()) / 1000)} seconds before next full poll (Telegram commands checked every ${Math.max(1, TELEGRAM_UI_POLL_INTERVAL_SECONDS)} seconds)...`
+    );
+
+    while (Date.now() < cycleEndsAt) {
+      const remainingMs = cycleEndsAt - Date.now();
+      const sleepMs = Math.min(telegramTickMs, remainingMs);
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.max(0, sleepMs));
+      });
+
+      if (Date.now() >= cycleEndsAt) {
+        break;
+      }
+
+      try {
+        await pollTelegramOnlyWithSource({ dependencies: fastPollDependencies });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("Telegram fast-poll error:", message);
+      }
+    }
   }
 }
 
