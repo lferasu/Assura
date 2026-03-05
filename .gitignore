@@ -1,0 +1,13 @@
+# Dependencies
+assistant/node_modules/
+
+# Environment and local secrets
+assistant/.env
+assistant/credentials.json
+assistant/token.json
+
+# Runtime data
+assistant/data/*.log
+
+# Removed UI workspace
+mobile/
